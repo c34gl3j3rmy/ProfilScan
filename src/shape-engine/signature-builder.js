@@ -5,6 +5,7 @@ export function buildShapeFingerprint(profile) {
   const normalizedPoints = normalizePoints(points);
   const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
   const angleHistogram = buildAngleHistogram(normalizedPoints, 16);
+  const hu = buildHuMoments(normalizedPoints);
 
   const values = [
     normalize(profile.width, 200),
@@ -12,17 +13,15 @@ export function buildShapeFingerprint(profile) {
     normalize(profile.ratio, 10),
     normalize(profile.surface, 2000),
     normalize(profile.perimeter, 1000),
-    ...radial
+    ...radial,
+    ...hu
   ];
 
   return {
-    version: '1.1',
+    version: '1.2',
     reference: profile.reference,
     values,
-    descriptors: {
-      radial,
-      angleHistogram
-    },
+    descriptors: { radial, angleHistogram, hu },
     summary: {
       width: profile.width,
       height: profile.height,
@@ -40,9 +39,10 @@ export function buildShapeDNA(profile) {
   const normalizedPoints = normalizePoints(points);
   const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
   const angleHistogram = buildAngleHistogram(normalizedPoints, 16);
+  const hu = buildHuMoments(normalizedPoints);
 
   return {
-    version: '1.1',
+    version: '1.2',
     identity: {
       reference: profile.reference,
       designation: profile.designation,
@@ -65,12 +65,7 @@ export function buildShapeDNA(profile) {
       normalizedPoints,
       simplifiedPoints: simplifyPoints(normalizedPoints, 0.01)
     },
-    descriptors: {
-      hu: [],
-      fourier: [],
-      radial,
-      angleHistogram
-    },
+    descriptors: { hu, fourier: [], radial, angleHistogram },
     quality: {
       source: 'svg',
       confidence: normalizedPoints.length ? 1 : 0.2,
@@ -83,13 +78,13 @@ export function buildDetectedFingerprintFromBox(object) {
   const ratio = object.width / object.height;
   const points = rectanglePoints(object.width, object.height);
   const normalizedPoints = normalizePoints(points);
+  const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
+  const angleHistogram = buildAngleHistogram(normalizedPoints, 16);
+  const hu = buildHuMoments(normalizedPoints);
   return {
-    version: '1.1',
+    version: '1.2',
     reference: 'detected',
-    descriptors: {
-      radial: buildRadialSignature(normalizedPoints, RADIAL_BINS),
-      angleHistogram: buildAngleHistogram(normalizedPoints, 16)
-    },
+    descriptors: { radial, angleHistogram, hu },
     summary: {
       width: object.width,
       height: object.height,
@@ -244,6 +239,57 @@ function buildAngleHistogram(points, binCount) {
   }
   const total = bins.reduce((sum, value) => sum + value, 0) || 1;
   return bins.map(value => value / total);
+}
+
+function buildHuMoments(points) {
+  if (!points.length) return Array.from({ length: 7 }, () => 0);
+  const raw = momentSet(points);
+  const cx = raw.m10 / raw.m00;
+  const cy = raw.m01 / raw.m00;
+  const mu20 = centralMoment(points, cx, cy, 2, 0);
+  const mu02 = centralMoment(points, cx, cy, 0, 2);
+  const mu11 = centralMoment(points, cx, cy, 1, 1);
+  const mu30 = centralMoment(points, cx, cy, 3, 0);
+  const mu03 = centralMoment(points, cx, cy, 0, 3);
+  const mu21 = centralMoment(points, cx, cy, 2, 1);
+  const mu12 = centralMoment(points, cx, cy, 1, 2);
+  const n20 = eta(mu20, raw.m00, 2, 0);
+  const n02 = eta(mu02, raw.m00, 0, 2);
+  const n11 = eta(mu11, raw.m00, 1, 1);
+  const n30 = eta(mu30, raw.m00, 3, 0);
+  const n03 = eta(mu03, raw.m00, 0, 3);
+  const n21 = eta(mu21, raw.m00, 2, 1);
+  const n12 = eta(mu12, raw.m00, 1, 2);
+  const h1 = n20 + n02;
+  const h2 = (n20 - n02) ** 2 + 4 * n11 ** 2;
+  const h3 = (n30 - 3 * n12) ** 2 + (3 * n21 - n03) ** 2;
+  const h4 = (n30 + n12) ** 2 + (n21 + n03) ** 2;
+  const h5 = (n30 - 3 * n12) * (n30 + n12) * ((n30 + n12) ** 2 - 3 * (n21 + n03) ** 2) + (3 * n21 - n03) * (n21 + n03) * (3 * (n30 + n12) ** 2 - (n21 + n03) ** 2);
+  const h6 = (n20 - n02) * ((n30 + n12) ** 2 - (n21 + n03) ** 2) + 4 * n11 * (n30 + n12) * (n21 + n03);
+  const h7 = (3 * n21 - n03) * (n30 + n12) * ((n30 + n12) ** 2 - 3 * (n21 + n03) ** 2) - (n30 - 3 * n12) * (n21 + n03) * (3 * (n30 + n12) ** 2 - (n21 + n03) ** 2);
+  return [h1, h2, h3, h4, h5, h6, h7].map(logHu);
+}
+
+function momentSet(points) {
+  return points.reduce((moments, point) => {
+    moments.m00 += 1;
+    moments.m10 += point.x;
+    moments.m01 += point.y;
+    return moments;
+  }, { m00: 0, m10: 0, m01: 0 });
+}
+
+function centralMoment(points, cx, cy, p, q) {
+  return points.reduce((sum, point) => sum + (point.x - cx) ** p * (point.y - cy) ** q, 0);
+}
+
+function eta(mu, m00, p, q) {
+  return mu / Math.max(Number.EPSILON, m00 ** (1 + (p + q) / 2));
+}
+
+function logHu(value) {
+  if (!Number.isFinite(value) || value === 0) return 0;
+  return -Math.sign(value) * Math.log10(Math.abs(value));
 }
 
 function simplifyPoints(points, tolerance) {
