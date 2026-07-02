@@ -21,6 +21,10 @@ const captureButton = document.querySelector('#captureButton');
 const cancelCameraButton = document.querySelector('#cancelCameraButton');
 const newAnalysisButton = document.querySelector('#newAnalysisButton');
 const video = document.querySelector('#cameraPreview');
+const analysisStatus = document.querySelector('#analysisStatus');
+const analysisProgress = document.querySelector('#analysisProgress');
+const analysisPercent = document.querySelector('#analysisPercent');
+const analysisDetails = document.querySelector('#analysisDetails');
 
 let collection = null;
 let worker = null;
@@ -28,6 +32,33 @@ let worker = null;
 function show(name) {
   Object.values(screens).forEach(screen => screen.classList.add('hidden'));
   screens[name].classList.remove('hidden');
+}
+
+function resetProgress(label = 'Preparation') {
+  analysisProgress.value = 0;
+  analysisPercent.textContent = '0 %';
+  analysisStatus.textContent = label;
+  analysisDetails.innerHTML = '';
+}
+
+function setProgress(percent, label, detail) {
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  analysisProgress.value = safePercent;
+  analysisPercent.textContent = `${safePercent} %`;
+  analysisStatus.textContent = label;
+
+  if (detail) {
+    const item = document.createElement('li');
+    item.textContent = detail;
+    analysisDetails.appendChild(item);
+  }
+}
+
+function showError(error, fallbackScreen = 'noBase') {
+  const message = error instanceof Error ? error.message : String(error);
+  setProgress(100, 'Erreur', message);
+  baseStatus.textContent = 'Erreur : ' + message;
+  setTimeout(() => show(fallbackScreen), 1800);
 }
 
 async function boot() {
@@ -44,13 +75,28 @@ async function boot() {
 
 async function importBaseFromFile(file) {
   if (!file) return;
+
   show('analysis');
-  document.querySelector('#analysisStatus').textContent = 'Import de la base profils';
-  const text = await file.text();
-  collection = await importDataprofilsText(text);
-  await saveCollection(collection);
-  baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
-  show('home');
+  resetProgress('Import de la base profils');
+
+  try {
+    setProgress(5, 'Lecture du fichier', `Fichier : ${file.name}`);
+    const text = await file.text();
+
+    setProgress(20, 'Validation du contenu', 'Recherche du tableau Profils');
+    collection = await importDataprofilsText(text, progress => {
+      setProgress(progress.percent, progress.label, progress.detail);
+    });
+
+    setProgress(92, 'Enregistrement local', 'Stockage IndexedDB');
+    await saveCollection(collection);
+
+    setProgress(100, 'Import termine', `${collection.profiles.length} profils valides`);
+    baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
+    setTimeout(() => show('home'), 500);
+  } catch (error) {
+    showError(error);
+  }
 }
 
 function getWorker() {
@@ -60,13 +106,23 @@ function getWorker() {
 
 async function analyzeImage(imageBitmap) {
   show('analysis');
-  document.querySelector('#analysisStatus').textContent = 'Analyse de l image';
+  resetProgress('Analyse de l image');
+  setProgress(10, 'Preparation de l image', 'Image chargee');
+
   const activeWorker = getWorker();
   const result = await new Promise((resolve, reject) => {
-    activeWorker.onmessage = event => resolve(event.data);
+    activeWorker.onmessage = event => {
+      if (event.data?.type === 'progress') {
+        setProgress(event.data.percent, event.data.label, event.data.detail);
+        return;
+      }
+      resolve(event.data);
+    };
     activeWorker.onerror = reject;
     activeWorker.postMessage({ type: 'analyze', imageBitmap, collection }, [imageBitmap]);
   });
+
+  setProgress(100, 'Resultat pret', 'Affichage des detections');
   renderResults(result);
   show('result');
 }
