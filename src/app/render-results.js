@@ -19,7 +19,8 @@ export function renderResults(result) {
   drawTrackedContours(ctx, result.debug?.contours || []);
   drawDetectedItems(ctx, result.items || []);
 
-  document.querySelector('#detectedCount').textContent = `Profils detectes : ${result.items.length}`;
+  const closedCount = (result.debug?.contours || []).filter(contour => contour.closed).length;
+  document.querySelector('#detectedCount').textContent = `Profils detectes : ${result.items.length} · formes fermees : ${closedCount}`;
   const list = document.querySelector('#resultList');
   list.innerHTML = '';
   for (const item of result.items) {
@@ -42,10 +43,10 @@ function drawEdgeOverlay(ctx, edges) {
 function drawTrackedContours(ctx, contours) {
   ctx.save();
   ctx.lineWidth = Math.max(2, ctx.canvas.width / 420);
-  ctx.strokeStyle = '#22c55e';
-  ctx.fillStyle = '#22c55e';
   for (const contour of contours) {
-    drawPolyline(ctx, contour.points || [], true);
+    ctx.strokeStyle = contour.closed ? '#22c55e' : '#f97316';
+    ctx.fillStyle = ctx.strokeStyle;
+    drawPolyline(ctx, contour.points || [], Boolean(contour.closed));
   }
   ctx.restore();
 }
