@@ -41,24 +41,36 @@ function resetProgress(label = 'Preparation') {
   analysisDetails.innerHTML = '';
 }
 
-function setProgress(percent, label, detail) {
+function formatError(error) {
+  if (error instanceof Error && error.message) return error.message;
+  if (error?.message) return String(error.message);
+  if (error?.filename) return `${error.filename}:${error.lineno || '?'} - ${error.message || 'Erreur script'}`;
+  if (error?.type) return `Evenement ${error.type}`;
+  return String(error);
+}
+
+function addLog(detail, className = '') {
+  if (!detail) return;
+  const item = document.createElement('li');
+  item.textContent = detail;
+  if (className) item.classList.add(className);
+  analysisDetails.appendChild(item);
+  analysisDetails.scrollTop = analysisDetails.scrollHeight;
+}
+
+function setProgress(percent, label, detail, className = '') {
   const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
   analysisProgress.value = safePercent;
   analysisPercent.textContent = `${safePercent} %`;
   analysisStatus.textContent = label;
-
-  if (detail) {
-    const item = document.createElement('li');
-    item.textContent = detail;
-    analysisDetails.appendChild(item);
-  }
+  addLog(detail, className);
 }
 
 function showError(error, fallbackScreen = 'noBase') {
-  const message = error instanceof Error ? error.message : String(error);
-  setProgress(100, 'Erreur', message);
+  const message = formatError(error);
+  setProgress(100, 'Erreur', message, 'error');
   baseStatus.textContent = 'Erreur : ' + message;
-  setTimeout(() => show(fallbackScreen), 1800);
+  setTimeout(() => show(fallbackScreen), 2200);
 }
 
 async function boot() {
@@ -74,7 +86,9 @@ async function boot() {
 }
 
 function getImportWorker() {
-  if (!importWorker) importWorker = new Worker('../workers/import-worker.js', { type: 'module' });
+  if (!importWorker) {
+    importWorker = new Worker(new URL('../workers/import-worker.js', import.meta.url), { type: 'module' });
+  }
   return importWorker;
 }
 
@@ -100,7 +114,10 @@ async function importBaseInWorker(text) {
       }
     };
 
-    activeWorker.onerror = reject;
+    activeWorker.onerror = event => {
+      reject(new Error(formatError(event)));
+    };
+
     activeWorker.postMessage({ type: 'import-dataprofils', text });
   });
 }
@@ -121,7 +138,7 @@ async function importBaseFromFile(file) {
     setProgress(92, 'Enregistrement local', 'Stockage IndexedDB');
     await saveCollection(collection);
 
-    setProgress(100, 'Import termine', `${collection.profiles.length} profils valides`);
+    setProgress(100, 'Import termine', `${collection.profiles.length} profils valides`, 'done');
     baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
     setTimeout(() => show('home'), 500);
   } catch (error) {
@@ -130,7 +147,9 @@ async function importBaseFromFile(file) {
 }
 
 function getAnalysisWorker() {
-  if (!analysisWorker) analysisWorker = new Worker('../workers/analysis-worker.js', { type: 'module' });
+  if (!analysisWorker) {
+    analysisWorker = new Worker(new URL('../workers/analysis-worker.js', import.meta.url), { type: 'module' });
+  }
   return analysisWorker;
 }
 
@@ -148,11 +167,11 @@ async function analyzeImage(imageBitmap) {
       }
       resolve(event.data);
     };
-    activeWorker.onerror = reject;
+    activeWorker.onerror = event => reject(new Error(formatError(event)));
     activeWorker.postMessage({ type: 'analyze', imageBitmap, collection }, [imageBitmap]);
   });
 
-  setProgress(100, 'Resultat pret', 'Affichage des detections');
+  setProgress(100, 'Resultat pret', 'Affichage des detections', 'done');
   renderResults(result);
   show('result');
 }
