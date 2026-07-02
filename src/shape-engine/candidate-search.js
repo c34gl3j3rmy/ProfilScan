@@ -1,9 +1,18 @@
-export function findBestMatch(detectedFingerprint, collection) {
+const DEFAULT_WEIGHTS = {
+  ratio: 0.25,
+  radial: 0.22,
+  hu: 0.20,
+  fourier: 0.18,
+  angle: 0.10,
+  fill: 0.05
+};
+
+export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
   if (!collection?.profiles?.length || !detectedFingerprint) return null;
 
   let best = null;
   for (const profile of collection.profiles) {
-    const scoreDetails = compareFingerprintsDetailed(detectedFingerprint, profile.fingerprint);
+    const scoreDetails = compareFingerprintsDetailed(detectedFingerprint, profile.fingerprint, customWeights);
     if (!best || scoreDetails.score > best.score) {
       best = { ...profile, score: scoreDetails.score, scoreDetails };
     }
@@ -12,11 +21,11 @@ export function findBestMatch(detectedFingerprint, collection) {
   return best;
 }
 
-export function compareFingerprints(detected, reference) {
-  return compareFingerprintsDetailed(detected, reference).score;
+export function compareFingerprints(detected, reference, customWeights = null) {
+  return compareFingerprintsDetailed(detected, reference, customWeights).score;
 }
 
-export function compareFingerprintsDetailed(detected, reference) {
+export function compareFingerprintsDetailed(detected, reference, customWeights = null) {
   if (!reference) return emptyScore();
 
   const ratioScore = compareRatio(
@@ -49,15 +58,7 @@ export function compareFingerprintsDetailed(detected, reference) {
   );
 
   const fillScore = compareFillRatio(detected.summary?.fillRatio ?? detected.fillRatio);
-
-  const weights = {
-    ratio: 0.25,
-    radial: 0.22,
-    hu: 0.20,
-    fourier: 0.18,
-    angle: 0.10,
-    fill: 0.05
-  };
+  const weights = normalizeWeights(customWeights || DEFAULT_WEIGHTS);
 
   const score =
     ratioScore * weights.ratio +
@@ -79,6 +80,27 @@ export function compareFingerprintsDetailed(detected, reference) {
     },
     weights
   };
+}
+
+function normalizeWeights(weights) {
+  const safeWeights = {
+    ratio: positiveNumber(weights.ratio),
+    radial: positiveNumber(weights.radial),
+    hu: positiveNumber(weights.hu),
+    fourier: positiveNumber(weights.fourier),
+    angle: positiveNumber(weights.angle),
+    fill: positiveNumber(weights.fill)
+  };
+
+  const total = Object.values(safeWeights).reduce((sum, value) => sum + value, 0);
+  if (total <= 0) return DEFAULT_WEIGHTS;
+
+  return Object.fromEntries(Object.entries(safeWeights).map(([key, value]) => [key, value / total]));
+}
+
+function positiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
 function emptyScore() {
