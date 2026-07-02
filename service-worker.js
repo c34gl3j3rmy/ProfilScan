@@ -1,10 +1,11 @@
-const CACHE_NAME = 'profilscan-v1.1.5';
+const CACHE_NAME = 'profilscan-v1.1.6';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './src/app/ui.css',
   './src/app/app.js',
+  './src/app/app-main.js',
   './src/app/camera.js',
   './src/app/image-import.js',
   './src/app/render-results.js',
