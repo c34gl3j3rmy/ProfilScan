@@ -34,10 +34,32 @@
         Remplacer la base
         <input id="replaceProfileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
       </label>
+    </section>
 
-      <details id="debugSettings" class="debug-panel">
-        <summary>Reglages debug</summary>
-        <p class="hint">Ajuste les parametres pour trouver les bons reglages de detection et de matching.</p>
+    <section id="screenCamera" class="card hidden">
+      <video id="cameraPreview" autoplay playsinline></video>
+      <p class="hint">Eviter les reflets · fond contraste · profils visibles</p>
+      <button id="captureButton" class="button primary">Capturer</button>
+      <button id="cancelCameraButton" class="button ghost">Retour</button>
+    </section>
+
+    <section id="screenAnalysis" class="card hidden">
+      <h2>Analyse en cours...</h2>
+      <progress id="analysisProgress" max="100" value="0"></progress>
+      <p id="analysisStatus">Preparation de l'image</p>
+      <p id="analysisPercent" class="progress-percent">0 %</p>
+      <ul id="analysisDetails" class="analysis-details"></ul>
+    </section>
+
+    <section id="screenResult" class="card hidden">
+      <h2>Resultat</h2>
+      <p id="detectedCount"></p>
+      <canvas id="resultCanvas"></canvas>
+      <ol id="resultList"></ol>
+
+      <details id="debugSettings" class="debug-panel" open>
+        <summary>Reglages</summary>
+        <p class="hint">Ajuste les parametres : l'analyse se relance automatiquement sur cette image.</p>
 
         <h3>Detection image</h3>
         <label class="range-row">Seuil contour <output id="edgeQuantileValue">82</output>%
@@ -73,28 +95,7 @@
           <input id="weightFillInput" type="range" min="0" max="30" value="5">
         </label>
       </details>
-    </section>
 
-    <section id="screenCamera" class="card hidden">
-      <video id="cameraPreview" autoplay playsinline></video>
-      <p class="hint">Eviter les reflets · fond contraste · profils visibles</p>
-      <button id="captureButton" class="button primary">Capturer</button>
-      <button id="cancelCameraButton" class="button ghost">Retour</button>
-    </section>
-
-    <section id="screenAnalysis" class="card hidden">
-      <h2>Analyse en cours...</h2>
-      <progress id="analysisProgress" max="100" value="0"></progress>
-      <p id="analysisStatus">Preparation de l'image</p>
-      <p id="analysisPercent" class="progress-percent">0 %</p>
-      <ul id="analysisDetails" class="analysis-details"></ul>
-    </section>
-
-    <section id="screenResult" class="card hidden">
-      <h2>Resultat</h2>
-      <p id="detectedCount"></p>
-      <canvas id="resultCanvas"></canvas>
-      <ol id="resultList"></ol>
       <button id="newAnalysisButton" class="button primary">Nouvelle analyse</button>
     </section>
   </main>
