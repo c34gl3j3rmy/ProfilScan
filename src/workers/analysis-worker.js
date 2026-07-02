@@ -2,6 +2,10 @@ import { findBestMatch } from '../shape-engine/candidate-search.js';
 import { buildDetectedFingerprintFromPoints } from '../shape-engine/signature-builder.js';
 
 const DEFAULT_SETTINGS = {
+  image: {
+    brightness: 0,
+    contrast: 100
+  },
   detection: {
     edgeQuantile: 0.82,
     linkRadius: 5,
@@ -28,8 +32,8 @@ self.onmessage = async event => {
     postProgress(10, 'Lecture de l image', `${imageBitmap.width} x ${imageBitmap.height} px`);
     const source = getScaledImageData(imageBitmap, 900);
 
-    postProgress(24, 'Pretraitement', `Image de travail : ${source.width} x ${source.height} px`);
-    const gray = buildGray(source.imageData);
+    postProgress(24, 'Pretraitement', `Luminosite ${activeSettings.image.brightness} / contraste ${activeSettings.image.contrast} %`);
+    const gray = buildGray(source.imageData, activeSettings.image);
     const blurred = blurGray(gray, source.width, source.height);
 
     postProgress(40, 'Detection des contours', `Seuil dynamique : ${Math.round(activeSettings.detection.edgeQuantile * 100)} %`);
@@ -48,8 +52,16 @@ self.onmessage = async event => {
     postProgress(88, 'Comparaison avec la base', `${objects.length} contours candidats`);
     const items = objects.map(object => matchObject(object, collection, activeSettings.weights));
 
+    const debug = {
+      edges: sampleMaskPoints(edges, source.width, source.height, source.scale, 3500),
+      contours: objects.map(object => ({
+        closed: true,
+        points: simplifyContourPoints(object.points, 180)
+      }))
+    };
+
     postProgress(96, 'Annotation', `${items.length} profils detectes`);
-    self.postMessage({ width: imageBitmap.width, height: imageBitmap.height, preview: imageBitmap, items, settings: activeSettings }, [imageBitmap]);
+    self.postMessage({ width: imageBitmap.width, height: imageBitmap.height, preview: imageBitmap, items, settings: activeSettings, debug }, [imageBitmap]);
   } catch (error) {
     self.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
   }
@@ -57,6 +69,10 @@ self.onmessage = async event => {
 
 function mergeSettings(settings = {}) {
   return {
+    image: {
+      brightness: clampNumber(settings.image?.brightness, DEFAULT_SETTINGS.image.brightness, -80, 80),
+      contrast: clampNumber(settings.image?.contrast, DEFAULT_SETTINGS.image.contrast, 50, 180)
+    },
     detection: {
       edgeQuantile: clampNumber(settings.detection?.edgeQuantile, DEFAULT_SETTINGS.detection.edgeQuantile, 0.6, 0.95),
       linkRadius: Math.round(clampNumber(settings.detection?.linkRadius, DEFAULT_SETTINGS.detection.linkRadius, 1, 12)),
@@ -94,14 +110,21 @@ function getScaledImageData(imageBitmap, maxSize) {
   return { imageData: ctx.getImageData(0, 0, width, height), width, height, scale };
 }
 
-function buildGray(imageData) {
+function buildGray(imageData, imageSettings) {
   const { data, width, height } = imageData;
   const gray = new Uint8Array(width * height);
+  const contrast = imageSettings.contrast / 100;
+  const brightness = imageSettings.brightness;
   for (let index = 0; index < gray.length; index++) {
     const offset = index * 4;
-    gray[index] = Math.round(0.299 * data[offset] + 0.587 * data[offset + 1] + 0.114 * data[offset + 2]);
+    const luminance = 0.299 * data[offset] + 0.587 * data[offset + 1] + 0.114 * data[offset + 2];
+    gray[index] = clampByte((luminance - 128) * contrast + 128 + brightness);
   }
   return gray;
+}
+
+function clampByte(value) {
+  return Math.max(0, Math.min(255, Math.round(value)));
 }
 
 function blurGray(gray, width, height) {
@@ -314,6 +337,16 @@ function filterAndMergeComponents(components, imageWidth, imageHeight, detection
     .sort((a, b) => b.width * b.height - a.width * a.height)
     .slice(0, 10)
     .sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
+function sampleMaskPoints(mask, width, height, scale, maxPoints) {
+  const points = [];
+  const step = Math.max(1, Math.ceil(mask.length / maxPoints));
+  for (let index = 0; index < mask.length; index += step) {
+    if (!mask[index]) continue;
+    points.push({ x: Math.round((index % width) / scale), y: Math.round(Math.floor(index / width) / scale) });
+  }
+  return points;
 }
 
 function areNear(a, b, gap) {
