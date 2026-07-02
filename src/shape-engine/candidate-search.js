@@ -8,17 +8,19 @@ const DEFAULT_WEIGHTS = {
 };
 
 export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
-  if (!collection?.profiles?.length || !detectedFingerprint) return null;
+  return findTopMatches(detectedFingerprint, collection, customWeights, 1)[0] || null;
+}
 
-  let best = null;
-  for (const profile of collection.profiles) {
-    const scoreDetails = compareFingerprintsDetailed(detectedFingerprint, profile.fingerprint, customWeights);
-    if (!best || scoreDetails.score > best.score) {
-      best = { ...profile, score: scoreDetails.score, scoreDetails };
-    }
-  }
+export function findTopMatches(detectedFingerprint, collection, customWeights = null, limit = 10) {
+  if (!collection?.profiles?.length || !detectedFingerprint) return [];
 
-  return best;
+  return collection.profiles
+    .map(profile => {
+      const scoreDetails = compareFingerprintsDetailed(detectedFingerprint, profile.fingerprint, customWeights);
+      return { ...profile, score: scoreDetails.score, scoreDetails };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, limit));
 }
 
 export function compareFingerprints(detected, reference, customWeights = null) {
