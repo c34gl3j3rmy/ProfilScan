@@ -45,8 +45,10 @@
 
     <section id="screenAnalysis" class="card hidden">
       <h2>Analyse en cours...</h2>
-      <progress></progress>
+      <progress id="analysisProgress" max="100" value="0"></progress>
       <p id="analysisStatus">Preparation de l'image</p>
+      <p id="analysisPercent" class="progress-percent">0 %</p>
+      <ul id="analysisDetails" class="analysis-details"></ul>
     </section>
 
     <section id="screenResult" class="card hidden">
