@@ -1,4 +1,5 @@
 import { findBestMatch } from '../shape-engine/candidate-search.js';
+import { buildDetectedFingerprintFromBox } from '../shape-engine/signature-builder.js';
 
 self.onmessage = async event => {
   const { type, imageBitmap, collection } = event.data;
@@ -15,7 +16,7 @@ self.onmessage = async event => {
     postProgress(40, 'Detection des contours', 'Calcul des gradients Sobel');
     const edges = buildEdgeMask(blurred, source.width, source.height);
 
-    postProgress(55, 'Renforcement des formes', 'Connexion des arêtes proches');
+    postProgress(55, 'Renforcement des formes', 'Connexion des aretes proches');
     const linkedEdges = morphClose(edges, source.width, source.height, 5, 2);
 
     postProgress(68, 'Recherche des objets', 'Composants connexes');
@@ -200,14 +201,16 @@ function filterAndMergeComponents(components, imageWidth, imageHeight) {
   const gap = Math.max(18, Math.min(imageWidth, imageHeight) * 0.045);
   const groups = [];
   for (const component of candidates) {
-    let group = groups.find(existing => areNear(existing, component, gap));
+    const group = groups.find(existing => areNear(existing, component, gap));
     if (!group) {
       groups.push({ ...component });
     } else {
+      const maxX = Math.max(group.x + group.width, component.x + component.width);
+      const maxY = Math.max(group.y + group.height, component.y + component.height);
       group.x = Math.min(group.x, component.x);
       group.y = Math.min(group.y, component.y);
-      group.width = Math.max(group.x + group.width, component.x + component.width) - group.x;
-      group.height = Math.max(group.y + group.height, component.y + component.height) - group.y;
+      group.width = maxX - group.x;
+      group.height = maxY - group.y;
       group.area += component.area;
     }
   }
@@ -234,17 +237,13 @@ function scaleBox(box, scale) {
 }
 
 function matchObject(object, collection) {
-  const detectedFingerprint = buildDetectedFingerprint(object);
+  const detectedFingerprint = buildDetectedFingerprintFromBox(object);
   const best = findBestMatch(detectedFingerprint, collection);
   return {
     reference: best?.reference || 'N/A',
     designation: best?.designation || 'Profil inconnu',
     score: best?.score || 0,
+    scoreDetails: best?.scoreDetails || null,
     boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height }
   };
-}
-
-function buildDetectedFingerprint(object) {
-  const ratio = object.width / object.height;
-  return { width: object.width, height: object.height, ratio, normalizedRatio: ratio >= 1 ? ratio : 1 / ratio, area: object.area, fillRatio: object.area / (object.width * object.height) };
 }
