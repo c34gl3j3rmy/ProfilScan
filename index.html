@@ -34,6 +34,45 @@
         Remplacer la base
         <input id="replaceProfileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
       </label>
+
+      <details id="debugSettings" class="debug-panel">
+        <summary>Reglages debug</summary>
+        <p class="hint">Ajuste les parametres pour trouver les bons reglages de detection et de matching.</p>
+
+        <h3>Detection image</h3>
+        <label class="range-row">Seuil contour <output id="edgeQuantileValue">82</output>%
+          <input id="edgeQuantileInput" type="range" min="60" max="95" value="82">
+        </label>
+        <label class="range-row">Connexion contours <output id="linkRadiusValue">5</output> px
+          <input id="linkRadiusInput" type="range" min="1" max="12" value="5">
+        </label>
+        <label class="range-row">Aire mini <output id="minAreaValue">0.07</output>%
+          <input id="minAreaInput" type="range" min="1" max="40" value="7">
+        </label>
+        <label class="range-row">Fusion objets <output id="mergeGapValue">4.5</output>%
+          <input id="mergeGapInput" type="range" min="1" max="15" value="45">
+        </label>
+
+        <h3>Poids matching</h3>
+        <label class="range-row">Ratio <output id="weightRatioValue">25</output>%
+          <input id="weightRatioInput" type="range" min="0" max="60" value="25">
+        </label>
+        <label class="range-row">Radial <output id="weightRadialValue">22</output>%
+          <input id="weightRadialInput" type="range" min="0" max="60" value="22">
+        </label>
+        <label class="range-row">Hu <output id="weightHuValue">20</output>%
+          <input id="weightHuInput" type="range" min="0" max="60" value="20">
+        </label>
+        <label class="range-row">Fourier <output id="weightFourierValue">18</output>%
+          <input id="weightFourierInput" type="range" min="0" max="60" value="18">
+        </label>
+        <label class="range-row">Angles <output id="weightAngleValue">10</output>%
+          <input id="weightAngleInput" type="range" min="0" max="40" value="10">
+        </label>
+        <label class="range-row">Remplissage <output id="weightFillValue">5</output>%
+          <input id="weightFillInput" type="range" min="0" max="30" value="5">
+        </label>
+      </details>
     </section>
 
     <section id="screenCamera" class="card hidden">
