@@ -25,6 +25,19 @@ const analysisProgress = document.querySelector('#analysisProgress');
 const analysisPercent = document.querySelector('#analysisPercent');
 const analysisDetails = document.querySelector('#analysisDetails');
 
+const debugInputs = {
+  edgeQuantile: bindRange('edgeQuantileInput', 'edgeQuantileValue', value => value),
+  linkRadius: bindRange('linkRadiusInput', 'linkRadiusValue', value => value),
+  minArea: bindRange('minAreaInput', 'minAreaValue', value => (value / 100).toFixed(2)),
+  mergeGap: bindRange('mergeGapInput', 'mergeGapValue', value => (value / 10).toFixed(1)),
+  weightRatio: bindRange('weightRatioInput', 'weightRatioValue', value => value),
+  weightRadial: bindRange('weightRadialInput', 'weightRadialValue', value => value),
+  weightHu: bindRange('weightHuInput', 'weightHuValue', value => value),
+  weightFourier: bindRange('weightFourierInput', 'weightFourierValue', value => value),
+  weightAngle: bindRange('weightAngleInput', 'weightAngleValue', value => value),
+  weightFill: bindRange('weightFillInput', 'weightFillValue', value => value)
+};
+
 let collection = null;
 let analysisWorker = null;
 let importWorker = null;
@@ -32,6 +45,43 @@ let importWorker = null;
 function show(name) {
   Object.values(screens).forEach(screen => screen.classList.add('hidden'));
   screens[name].classList.remove('hidden');
+}
+
+function bindRange(inputId, outputId, formatter) {
+  const input = document.querySelector(`#${inputId}`);
+  const output = document.querySelector(`#${outputId}`);
+  if (!input || !output) return null;
+
+  const sync = () => {
+    output.textContent = formatter(Number(input.value));
+  };
+  input.addEventListener('input', sync);
+  sync();
+  return input;
+}
+
+function getDebugSettings() {
+  return {
+    detection: {
+      edgeQuantile: numberValue(debugInputs.edgeQuantile, 82) / 100,
+      linkRadius: numberValue(debugInputs.linkRadius, 5),
+      minAreaRatio: numberValue(debugInputs.minArea, 7) / 10000,
+      mergeGapRatio: numberValue(debugInputs.mergeGap, 45) / 1000
+    },
+    weights: {
+      ratio: numberValue(debugInputs.weightRatio, 25),
+      radial: numberValue(debugInputs.weightRadial, 22),
+      hu: numberValue(debugInputs.weightHu, 20),
+      fourier: numberValue(debugInputs.weightFourier, 18),
+      angle: numberValue(debugInputs.weightAngle, 10),
+      fill: numberValue(debugInputs.weightFill, 5)
+    }
+  };
+}
+
+function numberValue(input, fallback) {
+  const value = Number(input?.value);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function resetProgress(label = 'Preparation') {
@@ -158,6 +208,7 @@ async function analyzeImage(imageBitmap) {
   resetProgress('Analyse de l image');
   setProgress(10, 'Preparation de l image', 'Image chargee');
 
+  const settings = getDebugSettings();
   const activeWorker = getAnalysisWorker();
   const result = await new Promise((resolve, reject) => {
     activeWorker.onmessage = event => {
@@ -168,7 +219,7 @@ async function analyzeImage(imageBitmap) {
       resolve(event.data);
     };
     activeWorker.onerror = event => reject(new Error(formatError(event)));
-    activeWorker.postMessage({ type: 'analyze', imageBitmap, collection }, [imageBitmap]);
+    activeWorker.postMessage({ type: 'analyze', imageBitmap, collection, settings }, [imageBitmap]);
   });
 
   setProgress(100, 'Resultat pret', 'Affichage des detections', 'done');
