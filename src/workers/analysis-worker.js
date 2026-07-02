@@ -1,9 +1,28 @@
 import { findBestMatch } from '../shape-engine/candidate-search.js';
 import { buildDetectedFingerprintFromPoints } from '../shape-engine/signature-builder.js';
 
+const DEFAULT_SETTINGS = {
+  detection: {
+    edgeQuantile: 0.82,
+    linkRadius: 5,
+    minAreaRatio: 0.0007,
+    mergeGapRatio: 0.045
+  },
+  weights: {
+    ratio: 25,
+    radial: 22,
+    hu: 20,
+    fourier: 18,
+    angle: 10,
+    fill: 5
+  }
+};
+
 self.onmessage = async event => {
-  const { type, imageBitmap, collection } = event.data;
+  const { type, imageBitmap, collection, settings } = event.data;
   if (type !== 'analyze') return;
+
+  const activeSettings = mergeSettings(settings);
 
   try {
     postProgress(10, 'Lecture de l image', `${imageBitmap.width} x ${imageBitmap.height} px`);
@@ -13,28 +32,53 @@ self.onmessage = async event => {
     const gray = buildGray(source.imageData);
     const blurred = blurGray(gray, source.width, source.height);
 
-    postProgress(40, 'Detection des contours', 'Calcul des gradients Sobel');
-    const edges = buildEdgeMask(blurred, source.width, source.height);
+    postProgress(40, 'Detection des contours', `Seuil dynamique : ${Math.round(activeSettings.detection.edgeQuantile * 100)} %`);
+    const edges = buildEdgeMask(blurred, source.width, source.height, activeSettings.detection.edgeQuantile);
 
-    postProgress(55, 'Renforcement des formes', 'Connexion des aretes proches');
-    const linkedEdges = morphClose(edges, source.width, source.height, 5, 2);
+    postProgress(55, 'Renforcement des formes', `Connexion : ${activeSettings.detection.linkRadius} px`);
+    const linkedEdges = morphClose(edges, source.width, source.height, activeSettings.detection.linkRadius, Math.max(1, Math.floor(activeSettings.detection.linkRadius / 2)));
 
     postProgress(68, 'Recherche des objets', 'Composants connexes');
     const components = findComponents(linkedEdges, source.width, source.height);
 
     postProgress(78, 'Extraction des contours', `${components.length} zones trouvees`);
-    const objects = filterAndMergeComponents(components, source.width, source.height)
+    const objects = filterAndMergeComponents(components, source.width, source.height, activeSettings.detection)
       .map(object => scaleDetectedObject(object, source.scale));
 
     postProgress(88, 'Comparaison avec la base', `${objects.length} contours candidats`);
-    const items = objects.map(object => matchObject(object, collection));
+    const items = objects.map(object => matchObject(object, collection, activeSettings.weights));
 
     postProgress(96, 'Annotation', `${items.length} profils detectes`);
-    self.postMessage({ width: imageBitmap.width, height: imageBitmap.height, preview: imageBitmap, items }, [imageBitmap]);
+    self.postMessage({ width: imageBitmap.width, height: imageBitmap.height, preview: imageBitmap, items, settings: activeSettings }, [imageBitmap]);
   } catch (error) {
     self.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
   }
 };
+
+function mergeSettings(settings = {}) {
+  return {
+    detection: {
+      edgeQuantile: clampNumber(settings.detection?.edgeQuantile, DEFAULT_SETTINGS.detection.edgeQuantile, 0.6, 0.95),
+      linkRadius: Math.round(clampNumber(settings.detection?.linkRadius, DEFAULT_SETTINGS.detection.linkRadius, 1, 12)),
+      minAreaRatio: clampNumber(settings.detection?.minAreaRatio, DEFAULT_SETTINGS.detection.minAreaRatio, 0.0001, 0.004),
+      mergeGapRatio: clampNumber(settings.detection?.mergeGapRatio, DEFAULT_SETTINGS.detection.mergeGapRatio, 0.001, 0.15)
+    },
+    weights: {
+      ratio: clampNumber(settings.weights?.ratio, DEFAULT_SETTINGS.weights.ratio, 0, 100),
+      radial: clampNumber(settings.weights?.radial, DEFAULT_SETTINGS.weights.radial, 0, 100),
+      hu: clampNumber(settings.weights?.hu, DEFAULT_SETTINGS.weights.hu, 0, 100),
+      fourier: clampNumber(settings.weights?.fourier, DEFAULT_SETTINGS.weights.fourier, 0, 100),
+      angle: clampNumber(settings.weights?.angle, DEFAULT_SETTINGS.weights.angle, 0, 100),
+      fill: clampNumber(settings.weights?.fill, DEFAULT_SETTINGS.weights.fill, 0, 100)
+    }
+  };
+}
+
+function clampNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
+}
 
 function postProgress(percent, label, detail) {
   self.postMessage({ type: 'progress', percent, label, detail });
@@ -71,7 +115,7 @@ function blurGray(gray, width, height) {
   return out;
 }
 
-function buildEdgeMask(gray, width, height) {
+function buildEdgeMask(gray, width, height, edgeQuantile) {
   const magnitudes = new Uint16Array(width * height);
   const samples = [];
 
@@ -87,8 +131,8 @@ function buildEdgeMask(gray, width, height) {
   }
 
   samples.sort((a, b) => a - b);
-  const autoThreshold = samples[Math.floor(samples.length * 0.82)] || 60;
-  const threshold = Math.max(45, Math.min(180, autoThreshold));
+  const autoThreshold = samples[Math.floor(samples.length * edgeQuantile)] || 60;
+  const threshold = Math.max(35, Math.min(220, autoThreshold));
   const mask = new Uint8Array(width * height);
 
   for (let i = 0; i < magnitudes.length; i++) {
@@ -233,9 +277,9 @@ function simplifyContourPoints(points, maxPoints) {
   return output;
 }
 
-function filterAndMergeComponents(components, imageWidth, imageHeight) {
+function filterAndMergeComponents(components, imageWidth, imageHeight, detectionSettings) {
   const imageArea = imageWidth * imageHeight;
-  const minArea = Math.max(180, imageArea * 0.0007);
+  const minArea = Math.max(80, imageArea * detectionSettings.minAreaRatio);
   const minSide = Math.max(18, Math.min(imageWidth, imageHeight) * 0.025);
 
   const candidates = components.filter(component => {
@@ -246,7 +290,7 @@ function filterAndMergeComponents(components, imageWidth, imageHeight) {
     return true;
   });
 
-  const gap = Math.max(18, Math.min(imageWidth, imageHeight) * 0.045);
+  const gap = Math.max(4, Math.min(imageWidth, imageHeight) * detectionSettings.mergeGapRatio);
   const groups = [];
   for (const component of candidates) {
     const group = groups.find(existing => areNear(existing, component, gap));
@@ -287,9 +331,9 @@ function scaleDetectedObject(object, scale) {
   };
 }
 
-function matchObject(object, collection) {
+function matchObject(object, collection, weights) {
   const detectedFingerprint = buildDetectedFingerprintFromPoints(object);
-  const best = findBestMatch(detectedFingerprint, collection);
+  const best = findBestMatch(detectedFingerprint, collection, weights);
   return {
     reference: best?.reference || 'N/A',
     designation: best?.designation || 'Profil inconnu',
