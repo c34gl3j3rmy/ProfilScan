@@ -1,7 +1,6 @@
 import { startCamera, stopCamera, captureFrame } from './camera.js';
 import { loadImageFile } from './image-import.js';
 import { renderResults } from './render-results.js';
-import { importDataprofilsText } from '../import/dataprofils-importer.js';
 import { getCollection, saveCollection } from '../storage/indexed-db.js';
 
 const screens = {
@@ -27,7 +26,8 @@ const analysisPercent = document.querySelector('#analysisPercent');
 const analysisDetails = document.querySelector('#analysisDetails');
 
 let collection = null;
-let worker = null;
+let analysisWorker = null;
+let importWorker = null;
 
 function show(name) {
   Object.values(screens).forEach(screen => screen.classList.add('hidden'));
@@ -73,6 +73,38 @@ async function boot() {
   show('home');
 }
 
+function getImportWorker() {
+  if (!importWorker) importWorker = new Worker('../workers/import-worker.js', { type: 'module' });
+  return importWorker;
+}
+
+async function importBaseInWorker(text) {
+  const activeWorker = getImportWorker();
+
+  return new Promise((resolve, reject) => {
+    activeWorker.onmessage = event => {
+      const message = event.data;
+
+      if (message?.type === 'progress') {
+        setProgress(message.percent, message.label, message.detail);
+        return;
+      }
+
+      if (message?.type === 'done') {
+        resolve(message.collection);
+        return;
+      }
+
+      if (message?.type === 'error') {
+        reject(new Error(message.message || 'Erreur pendant l import.'));
+      }
+    };
+
+    activeWorker.onerror = reject;
+    activeWorker.postMessage({ type: 'import-dataprofils', text });
+  });
+}
+
 async function importBaseFromFile(file) {
   if (!file) return;
 
@@ -83,10 +115,8 @@ async function importBaseFromFile(file) {
     setProgress(5, 'Lecture du fichier', `Fichier : ${file.name}`);
     const text = await file.text();
 
-    setProgress(20, 'Validation du contenu', 'Recherche du tableau Profils');
-    collection = await importDataprofilsText(text, progress => {
-      setProgress(progress.percent, progress.label, progress.detail);
-    });
+    setProgress(20, 'Demarrage de l import', 'Traitement dans un worker');
+    collection = await importBaseInWorker(text);
 
     setProgress(92, 'Enregistrement local', 'Stockage IndexedDB');
     await saveCollection(collection);
@@ -99,9 +129,9 @@ async function importBaseFromFile(file) {
   }
 }
 
-function getWorker() {
-  if (!worker) worker = new Worker('../workers/analysis-worker.js', { type: 'module' });
-  return worker;
+function getAnalysisWorker() {
+  if (!analysisWorker) analysisWorker = new Worker('../workers/analysis-worker.js', { type: 'module' });
+  return analysisWorker;
 }
 
 async function analyzeImage(imageBitmap) {
@@ -109,7 +139,7 @@ async function analyzeImage(imageBitmap) {
   resetProgress('Analyse de l image');
   setProgress(10, 'Preparation de l image', 'Image chargee');
 
-  const activeWorker = getWorker();
+  const activeWorker = getAnalysisWorker();
   const result = await new Promise((resolve, reject) => {
     activeWorker.onmessage = event => {
       if (event.data?.type === 'progress') {
