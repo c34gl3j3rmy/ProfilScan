@@ -92,5 +92,10 @@ function formatTopCandidates(candidates) {
 function formatScoreDetails(details) {
   const scores = details?.subscores;
   if (!scores) return '';
-  return `<div class="score-details">Ratio ${scores.ratio}% · Radial ${scores.radial}% · Hu ${scores.hu}% · Fourier ${scores.fourier}%</div>`;
+  return `<div class="score-details">${scoreBar('Ratio', scores.ratio)}${scoreBar('Radial', scores.radial)}${scoreBar('Hu', scores.hu)}${scoreBar('Fourier', scores.fourier)}${scoreBar('Angles', scores.angle)}${scoreBar('Remplissage', scores.fill)}</div>`;
+}
+
+function scoreBar(label, value) {
+  const safe = Math.max(0, Math.min(100, Number(value) || 0));
+  return `<div class="score-bar"><span>${label}</span><meter min="0" max="100" value="${safe}"></meter><strong>${safe}%</strong></div>`;
 }
