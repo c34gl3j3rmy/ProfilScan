@@ -1,5 +1,5 @@
 import { findBestMatch } from '../shape-engine/candidate-search.js';
-import { buildDetectedFingerprintFromBox } from '../shape-engine/signature-builder.js';
+import { buildDetectedFingerprintFromPoints } from '../shape-engine/signature-builder.js';
 
 self.onmessage = async event => {
   const { type, imageBitmap, collection } = event.data;
@@ -22,11 +22,11 @@ self.onmessage = async event => {
     postProgress(68, 'Recherche des objets', 'Composants connexes');
     const components = findComponents(linkedEdges, source.width, source.height);
 
-    postProgress(78, 'Filtrage geometrique', `${components.length} zones trouvees`);
+    postProgress(78, 'Extraction des contours', `${components.length} zones trouvees`);
     const objects = filterAndMergeComponents(components, source.width, source.height)
-      .map(box => scaleBox(box, source.scale));
+      .map(object => scaleDetectedObject(object, source.scale));
 
-    postProgress(88, 'Comparaison avec la base', `${objects.length} objets candidats`);
+    postProgress(88, 'Comparaison avec la base', `${objects.length} contours candidats`);
     const items = objects.map(object => matchObject(object, collection));
 
     postProgress(96, 'Annotation', `${items.length} profils detectes`);
@@ -152,6 +152,7 @@ function findComponents(mask, width, height) {
     let minY = height;
     let maxX = 0;
     let maxY = 0;
+    const pixels = [];
     queue.length = 0;
     queue.push(start);
     visited[start] = 1;
@@ -161,6 +162,7 @@ function findComponents(mask, width, height) {
       const x = current % width;
       const y = Math.floor(current / width);
       count++;
+      pixels.push({ x, y });
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);
       maxX = Math.max(maxX, x);
@@ -179,10 +181,56 @@ function findComponents(mask, width, height) {
         }
       }
     }
-    components.push({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1, area: count });
+
+    components.push({
+      x: minX,
+      y: minY,
+      width: maxX - minX + 1,
+      height: maxY - minY + 1,
+      area: count,
+      points: simplifyContourPoints(extractBoundaryPoints(pixels, mask, width, height), 240)
+    });
   }
 
   return components;
+}
+
+function extractBoundaryPoints(pixels, mask, width, height) {
+  const boundary = [];
+  for (const point of pixels) {
+    let edge = false;
+    for (let dy = -1; dy <= 1 && !edge; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const xx = point.x + dx;
+        const yy = point.y + dy;
+        if (xx < 0 || xx >= width || yy < 0 || yy >= height || !mask[yy * width + xx]) {
+          edge = true;
+          break;
+        }
+      }
+    }
+    if (edge) boundary.push(point);
+  }
+  return sortContourPoints(boundary);
+}
+
+function sortContourPoints(points) {
+  if (points.length <= 2) return points;
+  const center = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+  center.x /= points.length;
+  center.y /= points.length;
+  return [...points].sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
+}
+
+function simplifyContourPoints(points, maxPoints) {
+  if (points.length <= maxPoints) return points;
+  const step = points.length / maxPoints;
+  const output = [];
+  for (let i = 0; i < maxPoints; i++) {
+    output.push(points[Math.floor(i * step)]);
+  }
+  return output;
 }
 
 function filterAndMergeComponents(components, imageWidth, imageHeight) {
@@ -203,7 +251,7 @@ function filterAndMergeComponents(components, imageWidth, imageHeight) {
   for (const component of candidates) {
     const group = groups.find(existing => areNear(existing, component, gap));
     if (!group) {
-      groups.push({ ...component });
+      groups.push({ ...component, points: [...component.points] });
     } else {
       const maxX = Math.max(group.x + group.width, component.x + component.width);
       const maxY = Math.max(group.y + group.height, component.y + component.height);
@@ -212,11 +260,13 @@ function filterAndMergeComponents(components, imageWidth, imageHeight) {
       group.width = maxX - group.x;
       group.height = maxY - group.y;
       group.area += component.area;
+      group.points = simplifyContourPoints([...group.points, ...component.points], 320);
     }
   }
 
   return groups
     .filter(group => group.width * group.height > imageArea * 0.01)
+    .map(group => ({ ...group, points: simplifyContourPoints(sortContourPoints(group.points), 240) }))
     .sort((a, b) => b.width * b.height - a.width * a.height)
     .slice(0, 10)
     .sort((a, b) => a.y - b.y || a.x - b.x);
@@ -226,18 +276,19 @@ function areNear(a, b, gap) {
   return !(a.x + a.width + gap < b.x || b.x + b.width + gap < a.x || a.y + a.height + gap < b.y || b.y + b.height + gap < a.y);
 }
 
-function scaleBox(box, scale) {
+function scaleDetectedObject(object, scale) {
   return {
-    x: Math.round(box.x / scale),
-    y: Math.round(box.y / scale),
-    width: Math.round(box.width / scale),
-    height: Math.round(box.height / scale),
-    area: Math.round(box.area / (scale * scale))
+    x: Math.round(object.x / scale),
+    y: Math.round(object.y / scale),
+    width: Math.round(object.width / scale),
+    height: Math.round(object.height / scale),
+    area: Math.round(object.area / (scale * scale)),
+    points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) }))
   };
 }
 
 function matchObject(object, collection) {
-  const detectedFingerprint = buildDetectedFingerprintFromBox(object);
+  const detectedFingerprint = buildDetectedFingerprintFromPoints(object);
   const best = findBestMatch(detectedFingerprint, collection);
   return {
     reference: best?.reference || 'N/A',
