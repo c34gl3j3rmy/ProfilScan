@@ -19,15 +19,20 @@ export function renderResults(result) {
   drawTrackedContours(ctx, result.debug?.contours || []);
   drawDetectedItems(ctx, result.items || []);
 
+  const items = result.items || [];
   const closedCount = (result.debug?.contours || []).filter(contour => contour.closed).length;
-  document.querySelector('#detectedCount').textContent = `Profils detectes : ${result.items.length} · formes fermees : ${closedCount}`;
+  document.querySelector('#detectedCount').textContent = `Profils detectes : ${items.length} · formes fermees : ${closedCount}`;
   const list = document.querySelector('#resultList');
   list.innerHTML = '';
-  for (const item of result.items) {
+  for (const item of items) {
     const li = document.createElement('li');
-    li.innerHTML = `<strong>${item.reference}</strong><br>${item.designation}<br>${Math.round(item.score)} %${formatScoreDetails(item.scoreDetails)}`;
+    li.innerHTML = renderItem(item);
     list.appendChild(li);
   }
+}
+
+function renderItem(item) {
+  return `<strong>${item.reference}</strong><br>${item.designation}<br>${Math.round(item.score)} %${formatScoreDetails(item.scoreDetails)}${formatTopCandidates(item.topCandidates)}`;
 }
 
 function drawEdgeOverlay(ctx, edges) {
@@ -73,6 +78,15 @@ function drawPolyline(ctx, points, closed) {
   for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
   if (closed) ctx.closePath();
   ctx.stroke();
+}
+
+function formatTopCandidates(candidates) {
+  if (!Array.isArray(candidates) || candidates.length <= 1) return '';
+  const rows = candidates.slice(0, 10).map((candidate, index) => {
+    const details = candidate.scoreDetails?.subscores || {};
+    return `<tr><td>${index + 1}</td><td>${candidate.reference}</td><td>${Math.round(candidate.score)}%</td><td>R ${details.ratio ?? '-'} · Hu ${details.hu ?? '-'} · F ${details.fourier ?? '-'}</td></tr>`;
+  }).join('');
+  return `<details class="score-details"><summary>Top candidats</summary><table><tbody>${rows}</tbody></table></details>`;
 }
 
 function formatScoreDetails(details) {
