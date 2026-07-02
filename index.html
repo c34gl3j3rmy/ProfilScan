@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>ProfilScan</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="src/app/ui.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="app-header">
+      <h1>ProfilScan</h1>
+      <p id="baseStatus">Verification de la base locale...</p>
+    </header>
+
+    <section id="screenNoBase" class="card hidden">
+      <h2>Aucune base profils chargee</h2>
+      <p>Importe ton fichier <strong>dataprofils.js</strong>. Il restera uniquement sur cet appareil.</p>
+      <label class="button primary">
+        Importer la base profils
+        <input id="profileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
+      </label>
+    </section>
+
+    <section id="screenHome" class="card hidden">
+      <button id="cameraButton" class="button primary">Prendre une photo</button>
+      <label class="button secondary">
+        Importer une image
+        <input id="imageInput" type="file" accept="image/*" hidden>
+      </label>
+      <label class="button ghost">
+        Remplacer la base
+        <input id="replaceProfileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
+      </label>
+    </section>
+
+    <section id="screenCamera" class="card hidden">
+      <video id="cameraPreview" autoplay playsinline></video>
+      <p class="hint">Eviter les reflets · fond contraste · profils visibles</p>
+      <button id="captureButton" class="button primary">Capturer</button>
+      <button id="cancelCameraButton" class="button ghost">Retour</button>
+    </section>
+
+    <section id="screenAnalysis" class="card hidden">
+      <h2>Analyse en cours...</h2>
+      <progress></progress>
+      <p id="analysisStatus">Preparation de l'image</p>
+    </section>
+
+    <section id="screenResult" class="card hidden">
+      <h2>Resultat</h2>
+      <p id="detectedCount"></p>
+      <canvas id="resultCanvas"></canvas>
+      <ol id="resultList"></ol>
+      <button id="newAnalysisButton" class="button primary">Nouvelle analyse</button>
+    </section>
+  </main>
+
+  <script type="module" src="src/app/app.js"></script>
+</body>
+</html>
