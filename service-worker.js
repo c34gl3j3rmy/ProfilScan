@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.1.3';
+const CACHE_NAME = 'profilscan-v1.1.4';
 const ASSETS = [
   './',
   './index.html',
@@ -11,8 +11,10 @@ const ASSETS = [
   './src/import/dataprofils-importer.js',
   './src/storage/indexed-db.js',
   './src/shape-engine/signature-builder.js',
+  './src/shape-engine/candidate-search.js',
   './src/workers/import-worker.js',
-  './src/workers/analysis-worker.js'
+  './src/workers/analysis-worker.js',
+  './src/workers/contour-tracer.js'
 ];
 
 self.addEventListener('install', event => {
