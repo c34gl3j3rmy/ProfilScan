@@ -59,7 +59,15 @@
 
       <details id="debugSettings" class="debug-panel" open>
         <summary>Reglages</summary>
-        <p class="hint">Ajuste les parametres : l'analyse se relance automatiquement sur cette image.</p>
+        <p class="hint">Rouge = contours detectes. Vert = formes continues retenues. Les reglages relancent l'analyse en direct.</p>
+
+        <h3>Image</h3>
+        <label class="range-row">Luminosite <output id="brightnessValue">0</output>
+          <input id="brightnessInput" type="range" min="-80" max="80" value="0">
+        </label>
+        <label class="range-row">Contraste <output id="contrastValue">100</output>%
+          <input id="contrastInput" type="range" min="50" max="180" value="100">
+        </label>
 
         <h3>Detection image</h3>
         <label class="range-row">Seuil contour <output id="edgeQuantileValue">82</output>%
