@@ -1,4 +1,5 @@
 const RADIAL_BINS = 64;
+const FOURIER_TERMS = 16;
 
 export function buildShapeFingerprint(profile) {
   const points = sampleSvgPath(profile.svgPath || profile.paths || '');
@@ -6,6 +7,7 @@ export function buildShapeFingerprint(profile) {
   const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
   const angleHistogram = buildAngleHistogram(normalizedPoints, 16);
   const hu = buildHuMoments(normalizedPoints);
+  const fourier = buildFourierDescriptor(normalizedPoints, FOURIER_TERMS);
 
   const values = [
     normalize(profile.width, 200),
@@ -14,14 +16,15 @@ export function buildShapeFingerprint(profile) {
     normalize(profile.surface, 2000),
     normalize(profile.perimeter, 1000),
     ...radial,
-    ...hu
+    ...hu,
+    ...fourier
   ];
 
   return {
-    version: '1.2',
+    version: '1.3',
     reference: profile.reference,
     values,
-    descriptors: { radial, angleHistogram, hu },
+    descriptors: { radial, angleHistogram, hu, fourier },
     summary: {
       width: profile.width,
       height: profile.height,
@@ -40,9 +43,10 @@ export function buildShapeDNA(profile) {
   const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
   const angleHistogram = buildAngleHistogram(normalizedPoints, 16);
   const hu = buildHuMoments(normalizedPoints);
+  const fourier = buildFourierDescriptor(normalizedPoints, FOURIER_TERMS);
 
   return {
-    version: '1.2',
+    version: '1.3',
     identity: {
       reference: profile.reference,
       designation: profile.designation,
@@ -65,7 +69,7 @@ export function buildShapeDNA(profile) {
       normalizedPoints,
       simplifiedPoints: simplifyPoints(normalizedPoints, 0.01)
     },
-    descriptors: { hu, fourier: [], radial, angleHistogram },
+    descriptors: { hu, fourier, radial, angleHistogram },
     quality: {
       source: 'svg',
       confidence: normalizedPoints.length ? 1 : 0.2,
@@ -81,10 +85,11 @@ export function buildDetectedFingerprintFromBox(object) {
   const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
   const angleHistogram = buildAngleHistogram(normalizedPoints, 16);
   const hu = buildHuMoments(normalizedPoints);
+  const fourier = buildFourierDescriptor(normalizedPoints, FOURIER_TERMS);
   return {
-    version: '1.2',
+    version: '1.3',
     reference: 'detected',
-    descriptors: { radial, angleHistogram, hu },
+    descriptors: { radial, angleHistogram, hu, fourier },
     summary: {
       width: object.width,
       height: object.height,
@@ -268,6 +273,38 @@ function buildHuMoments(points) {
   const h6 = (n20 - n02) * ((n30 + n12) ** 2 - (n21 + n03) ** 2) + 4 * n11 * (n30 + n12) * (n21 + n03);
   const h7 = (3 * n21 - n03) * (n30 + n12) * ((n30 + n12) ** 2 - 3 * (n21 + n03) ** 2) - (n30 - 3 * n12) * (n21 + n03) * (3 * (n30 + n12) ** 2 - (n21 + n03) ** 2);
   return [h1, h2, h3, h4, h5, h6, h7].map(logHu);
+}
+
+function buildFourierDescriptor(points, termCount) {
+  const sampled = resamplePoints(points, 128);
+  if (!sampled.length) return Array.from({ length: termCount }, () => 0);
+
+  const descriptors = [];
+  for (let k = 1; k <= termCount; k++) {
+    let real = 0;
+    let imag = 0;
+    for (let n = 0; n < sampled.length; n++) {
+      const angle = (-2 * Math.PI * k * n) / sampled.length;
+      const value = sampled[n].x + sampled[n].y;
+      real += value * Math.cos(angle);
+      imag += value * Math.sin(angle);
+    }
+    descriptors.push(Math.hypot(real, imag) / sampled.length);
+  }
+
+  const base = descriptors[0] || 1;
+  return descriptors.map(value => value / base);
+}
+
+function resamplePoints(points, count) {
+  if (!points.length) return [];
+  if (points.length === count) return points;
+  const result = [];
+  for (let i = 0; i < count; i++) {
+    const index = Math.round((i / count) * (points.length - 1));
+    result.push(points[index]);
+  }
+  return result;
 }
 
 function momentSet(points) {
