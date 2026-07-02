@@ -67,16 +67,83 @@ function yieldToBrowser() {
 }
 
 function parseDataprofils(text) {
-  const jsonText = extractArrayText(text);
+  const arrayText = extractArrayText(text);
+  const jsonText = toJsonLikeArray(arrayText);
+
   try {
     return JSON.parse(jsonText);
-  } catch {
-    const sanitized = jsonText
-      .replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3')
-      .replace(/,\s*]/g, ']')
-      .replace(/,\s*}/g, '}');
-    return JSON.parse(sanitized);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Base profils illisible : ${message}`);
   }
+}
+
+function toJsonLikeArray(arrayText) {
+  const withoutComments = stripComments(arrayText);
+  return withoutComments
+    .replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3')
+    .replace(/,\s*([}\]])/g, '$1');
+}
+
+function stripComments(text) {
+  let output = '';
+  let inString = false;
+  let quote = '';
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (inLineComment) {
+      if (char === '\n') {
+        inLineComment = false;
+        output += char;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === '*' && next === '/') {
+        inBlockComment = false;
+        index++;
+      }
+      continue;
+    }
+
+    if (inString) {
+      output += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) inString = false;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inString = true;
+      quote = char;
+      output += char;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      inLineComment = true;
+      index++;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      inBlockComment = true;
+      index++;
+      continue;
+    }
+
+    output += char;
+  }
+
+  return output;
 }
 
 function extractArrayText(text) {
@@ -107,7 +174,7 @@ function extractArrayText(text) {
 
     if (char === '[') depth++;
     if (char === ']') depth--;
-    if (depth === 0) return text.slice(start, i + 1).replace(/'/g, '"');
+    if (depth === 0) return text.slice(start, i + 1);
   }
 
   throw new Error('Fin du tableau Profils introuvable.');
