@@ -1,4 +1,4 @@
-import { findBestMatch } from '../shape-engine/candidate-search.js';
+import { findTopMatches } from '../shape-engine/candidate-search.js';
 import { buildDetectedFingerprintFromPoints } from '../shape-engine/signature-builder.js';
 import { traceBoundary } from './contour-tracer.js';
 import { getScaledImageData, buildGray, blurGray, buildEdgeMask } from './image-preprocessing.js';
@@ -194,6 +194,7 @@ function scaleDetectedObject(object, scale) {
 
 function matchObject(object, collection, weights) {
   const detectedFingerprint = buildDetectedFingerprintFromPoints(object);
-  const best = findBestMatch(detectedFingerprint, collection, weights);
-  return { reference: best?.reference || 'N/A', designation: best?.designation || 'Profil inconnu', score: best?.score || 0, scoreDetails: best?.scoreDetails || null, boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height } };
+  const topCandidates = findTopMatches(detectedFingerprint, collection, weights, 10);
+  const best = topCandidates[0];
+  return { reference: best?.reference || 'N/A', designation: best?.designation || 'Profil inconnu', score: best?.score || 0, scoreDetails: best?.scoreDetails || null, topCandidates, boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height } };
 }
