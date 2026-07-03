@@ -1,6 +1,7 @@
 const RADIAL_BINS = 64;
 const FOURIER_TERMS = 16;
 const ANGLE_BINS = 16;
+const FILL_GRID_SIZE = 96;
 
 export function buildShapeFingerprint(profile) {
   const points = sampleSvgPath(profile.svgPath || profile.paths || '');
@@ -79,10 +80,12 @@ export function buildDetectedFingerprintFromPoints(object) {
 function buildFingerprint({ reference, width, height, ratio, surface, perimeter, fillRatio = 0, points, source }) {
   const normalizedPoints = normalizePoints(points || []);
   const compactPoints = simplifyPoints(normalizedPoints, 0.01).slice(0, 240);
+  const filledShape = buildFilledShape(normalizedPoints, FILL_GRID_SIZE);
   const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
   const angleHistogram = buildAngleHistogram(normalizedPoints, ANGLE_BINS);
-  const hu = buildHuMoments(normalizedPoints);
+  const hu = buildHuMoments(filledShape.points.length ? filledShape.points : normalizedPoints);
   const fourier = buildFourierDescriptor(normalizedPoints, FOURIER_TERMS);
+  const effectiveFillRatio = filledShape.fillRatio || fillRatio;
   const values = [
     normalize(width, 200),
     normalize(height, 200),
@@ -95,7 +98,7 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   ];
 
   return {
-    version: '1.5',
+    version: '1.6',
     reference,
     values,
     contour: {
@@ -109,9 +112,10 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       normalizedRatio: normalizeRatio(ratio),
       surface,
       perimeter,
-      fillRatio,
+      fillRatio: effectiveFillRatio,
       pointCount: normalizedPoints.length,
-      source
+      source,
+      huSource: filledShape.points.length ? 'filled-mask' : 'contour'
     }
   };
 }
@@ -257,6 +261,40 @@ function buildAngleHistogram(points, binCount) {
   }
   const total = bins.reduce((sum, value) => sum + value, 0) || 1;
   return bins.map(value => value / total);
+}
+
+function buildFilledShape(points, gridSize) {
+  if (points.length < 3) return { points: [], fillRatio: 0 };
+  const output = [];
+  const step = 1 / gridSize;
+  const start = -0.5 + step / 2;
+
+  for (let yIndex = 0; yIndex < gridSize; yIndex++) {
+    const y = start + yIndex * step;
+    for (let xIndex = 0; xIndex < gridSize; xIndex++) {
+      const x = start + xIndex * step;
+      if (isPointInsidePolygon(x, y, points)) output.push({ x, y });
+    }
+  }
+
+  return {
+    points: output,
+    fillRatio: output.length / (gridSize * gridSize)
+  };
+}
+
+function isPointInsidePolygon(x, y, points) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i];
+    const b = points[j];
+    const crosses = (a.y > y) !== (b.y > y);
+    if (crosses) {
+      const atX = ((b.x - a.x) * (y - a.y)) / ((b.y - a.y) || 1e-12) + a.x;
+      if (x < atX) inside = !inside;
+    }
+  }
+  return inside;
 }
 
 function buildHuMoments(points) {
