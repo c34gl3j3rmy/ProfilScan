@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.2.1';
+const CACHE_NAME = 'profilscan-v1.2.2';
 const ASSETS = [
   './',
   './index.html',
@@ -6,6 +6,7 @@ const ASSETS = [
   './src/app/ui.css',
   './src/app/app.js',
   './src/app/app-main.js',
+  './src/app/auto-settings.js',
   './src/app/camera.js',
   './src/app/image-import.js',
   './src/app/render-results.js',
