@@ -1,5 +1,6 @@
 import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
 import { buildShapeDNA, buildShapeFingerprint } from '../shape-engine/signature-builder.js';
+import { buildRasterizedShapeFingerprint } from '../shape-engine/svg-raster-signature.js';
 
 export async function importDataprofilsText(text, onProgress = () => {}, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
@@ -31,20 +32,23 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
   }
 
   const enriched = [];
+  let rasterizedCount = 0;
   for (let index = 0; index < validProfiles.length; index++) {
     const profile = validProfiles[index];
-    const fingerprint = buildShapeFingerprint(profile, settings);
+    const rasterFingerprint = await buildRasterizedShapeFingerprint(profile, settings);
+    const fingerprint = rasterFingerprint || buildShapeFingerprint(profile, settings);
     const dna = buildShapeDNA(profile, settings);
-    enriched.push({ ...profile, fingerprint, dna });
+    enriched.push({ ...profile, fingerprint, dna: { ...dna, descriptors: fingerprint.descriptors, pipelineSettings: settings } });
+    if (rasterFingerprint) rasterizedCount++;
 
     if (index % 10 === 0 || index === validProfiles.length - 1) {
       const percent = 58 + ((index + 1) / validProfiles.length) * 30;
-      report(onProgress, percent, 'Generation des signatures', `${index + 1} / ${validProfiles.length}`);
+      report(onProgress, percent, 'Generation des signatures', `${index + 1} / ${validProfiles.length} · raster ${rasterizedCount}`);
       await yieldToBrowser();
     }
   }
 
-  report(onProgress, 90, 'Collection prete', `${enriched.length} profils prepares`);
+  report(onProgress, 90, 'Collection prete', `${enriched.length} profils prepares · ${rasterizedCount} rasterises`);
 
   return {
     id: 'local-profils',
@@ -55,7 +59,8 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
     stats: {
       totalProfiles: profiles.length,
       validProfiles: enriched.length,
-      invalidProfiles: invalidCount
+      invalidProfiles: invalidCount,
+      rasterizedProfiles: rasterizedCount
     },
     profiles: enriched
   };
