@@ -49,15 +49,16 @@ self.onmessage = async event => {
 
 function mergeSettings(settings = {}) {
   return {
+    expectedReference: String(settings.expectedReference || '').trim(),
     image: {
-      brightness: clampNumber(settings.image?.brightness, DEFAULT_SETTINGS.image.brightness, -80, 80),
-      contrast: clampNumber(settings.image?.contrast, DEFAULT_SETTINGS.image.contrast, 50, 180)
+      brightness: clampNumber(settings.image?.brightness, DEFAULT_SETTINGS.image.brightness, -100, 100),
+      contrast: clampNumber(settings.image?.contrast, DEFAULT_SETTINGS.image.contrast, 0, 220)
     },
     detection: {
-      edgeQuantile: clampNumber(settings.detection?.edgeQuantile, DEFAULT_SETTINGS.detection.edgeQuantile, 0.6, 0.95),
-      linkRadius: Math.round(clampNumber(settings.detection?.linkRadius, DEFAULT_SETTINGS.detection.linkRadius, 1, 12)),
-      minAreaRatio: clampNumber(settings.detection?.minAreaRatio, DEFAULT_SETTINGS.detection.minAreaRatio, 0.0001, 0.004),
-      mergeGapRatio: clampNumber(settings.detection?.mergeGapRatio, DEFAULT_SETTINGS.detection.mergeGapRatio, 0.001, 0.15)
+      edgeQuantile: clampNumber(settings.detection?.edgeQuantile, DEFAULT_SETTINGS.detection.edgeQuantile, 0.01, 0.99),
+      linkRadius: Math.round(clampNumber(settings.detection?.linkRadius, DEFAULT_SETTINGS.detection.linkRadius, 1, 50)),
+      minAreaRatio: clampNumber(settings.detection?.minAreaRatio, DEFAULT_SETTINGS.detection.minAreaRatio, 0, 0.05),
+      mergeGapRatio: clampNumber(settings.detection?.mergeGapRatio, DEFAULT_SETTINGS.detection.mergeGapRatio, 0.001, 0.12)
     },
     weights: {
       ratio: clampNumber(settings.weights?.ratio, DEFAULT_SETTINGS.weights.ratio, 0, 100),
@@ -73,8 +74,7 @@ function mergeSettings(settings = {}) {
 function clampNumber(value, fallback, min, max) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
-}
-
+}\n
 function postProgress(percent, label, detail) {
   self.postMessage({ type: 'progress', percent, label, detail });
 }
