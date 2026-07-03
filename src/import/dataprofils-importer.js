@@ -33,22 +33,25 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
 
   const enriched = [];
   let rasterizedCount = 0;
+  let rasterFallbackCount = 0;
+
   for (let index = 0; index < validProfiles.length; index++) {
     const profile = validProfiles[index];
-    const rasterFingerprint = await buildRasterizedShapeFingerprint(profile, settings);
+    const rasterFingerprint = await tryBuildRasterizedFingerprint(profile, settings);
     const fingerprint = rasterFingerprint || buildShapeFingerprint(profile, settings);
     const dna = buildShapeDNA(profile, settings);
     enriched.push({ ...profile, fingerprint, dna: { ...dna, descriptors: fingerprint.descriptors, pipelineSettings: settings } });
     if (rasterFingerprint) rasterizedCount++;
+    else rasterFallbackCount++;
 
     if (index % 10 === 0 || index === validProfiles.length - 1) {
       const percent = 58 + ((index + 1) / validProfiles.length) * 30;
-      report(onProgress, percent, 'Generation des signatures', `${index + 1} / ${validProfiles.length} · raster ${rasterizedCount}`);
+      report(onProgress, percent, 'Generation des signatures', `${index + 1} / ${validProfiles.length} · raster ${rasterizedCount} · secours ${rasterFallbackCount}`);
       await yieldToBrowser();
     }
   }
 
-  report(onProgress, 90, 'Collection prete', `${enriched.length} profils prepares · ${rasterizedCount} rasterises`);
+  report(onProgress, 90, 'Collection prete', `${enriched.length} profils prepares · ${rasterizedCount} rasterises · ${rasterFallbackCount} secours`);
 
   return {
     id: 'local-profils',
@@ -60,10 +63,20 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
       totalProfiles: profiles.length,
       validProfiles: enriched.length,
       invalidProfiles: invalidCount,
-      rasterizedProfiles: rasterizedCount
+      rasterizedProfiles: rasterizedCount,
+      rasterFallbackProfiles: rasterFallbackCount
     },
     profiles: enriched
   };
+}
+
+async function tryBuildRasterizedFingerprint(profile, settings) {
+  try {
+    return await buildRasterizedShapeFingerprint(profile, settings);
+  } catch (error) {
+    console.warn('Rasterisation SVG ignoree', profile.reference, error);
+    return null;
+  }
 }
 
 function report(onProgress, percent, label, detail) {
