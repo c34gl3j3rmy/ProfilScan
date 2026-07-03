@@ -74,7 +74,8 @@ function mergeSettings(settings = {}) {
 function clampNumber(value, fallback, min, max) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
-}\n
+}
+
 function postProgress(percent, label, detail) {
   self.postMessage({ type: 'progress', percent, label, detail });
 }
