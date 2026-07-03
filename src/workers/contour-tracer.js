@@ -1,33 +1,40 @@
 const DIRECTIONS = [
-  { x: 1, y: 0 },
-  { x: 1, y: 1 },
-  { x: 0, y: 1 },
-  { x: -1, y: 1 },
-  { x: -1, y: 0 },
-  { x: -1, y: -1 },
-  { x: 0, y: -1 },
-  { x: 1, y: -1 }
+  { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: -1, y: 1 },
+  { x: -1, y: 0 }, { x: -1, y: -1 }, { x: 0, y: -1 }, { x: 1, y: -1 }
 ];
 
 export function traceBoundary(pixels, mask, width, height) {
-  const boundarySet = new Set();
-  let start = null;
+  const boundarySet = buildBoundarySet(pixels, mask, width, height);
+  const exterior = traceSet(boundarySet);
+  const holes = findHoleContours(pixels, mask, width, height);
 
+  return {
+    closed: exterior.closed,
+    points: exterior.points,
+    holes
+  };
+}
+
+function buildBoundarySet(pixels, mask, width, height) {
+  const set = new Set();
   for (const point of pixels) {
-    if (!isBoundary(point.x, point.y, mask, width, height)) continue;
-    boundarySet.add(pointKey(point.x, point.y));
-    if (!start || point.y < start.y || (point.y === start.y && point.x < start.x)) start = point;
+    if (isBoundary(point.x, point.y, mask, width, height)) set.add(pointKey(point.x, point.y));
   }
+  return set;
+}
 
+function traceSet(boundarySet) {
+  const start = firstPoint(boundarySet);
   if (!start) return { closed: false, points: [] };
 
   const contour = [start];
+  const visited = new Set([pointKey(start.x, start.y)]);
   let current = start;
   let direction = 4;
-  const maxSteps = Math.min(boundarySet.size * 3, 2500);
+  const maxSteps = Math.min(boundarySet.size * 4, 5000);
 
   for (let step = 0; step < maxSteps; step++) {
-    const next = findNext(current, direction, boundarySet);
+    const next = findNext(current, direction, boundarySet, visited, start, contour.length > 8);
     if (!next) break;
 
     if (next.x === start.x && next.y === start.y && contour.length > 8) {
@@ -35,36 +42,111 @@ export function traceBoundary(pixels, mask, width, height) {
     }
 
     contour.push({ x: next.x, y: next.y });
+    visited.add(pointKey(next.x, next.y));
     current = next;
     direction = next.direction;
   }
 
-  return {
-    closed: false,
-    points: contour.length > 2 ? contour : sortPoints([...boundarySet].map(pointFromKey))
-  };
+  return { closed: false, points: contour.length > 2 ? contour : sortPoints([...boundarySet].map(pointFromKey)) };
 }
 
-function findNext(current, previousDirection, boundarySet) {
+function findNext(current, previousDirection, boundarySet, visited, start, canClose) {
   const startDirection = (previousDirection + 6) % 8;
   for (let offset = 0; offset < 8; offset++) {
     const directionIndex = (startDirection + offset) % 8;
     const direction = DIRECTIONS[directionIndex];
     const x = current.x + direction.x;
     const y = current.y + direction.y;
-    if (boundarySet.has(pointKey(x, y))) return { x, y, direction: directionIndex };
+    const key = pointKey(x, y);
+    if (!boundarySet.has(key)) continue;
+    if (canClose && x === start.x && y === start.y) return { x, y, direction: directionIndex };
+    if (!visited.has(key)) return { x, y, direction: directionIndex };
   }
   return null;
 }
 
-function isBoundary(x, y, mask, width, height) {
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      const xx = x + dx;
-      const yy = y + dy;
-      if (xx < 0 || xx >= width || yy < 0 || yy >= height || !mask[yy * width + xx]) return true;
+function findHoleContours(pixels, mask, width, height) {
+  const bounds = getBounds(pixels, width, height);
+  const visited = new Set();
+  const holes = [];
+
+  for (let y = bounds.minY; y <= bounds.maxY; y++) {
+    for (let x = bounds.minX; x <= bounds.maxX; x++) {
+      const key = pointKey(x, y);
+      if (visited.has(key) || mask[y * width + x]) continue;
+
+      const region = collectBackgroundRegion(x, y, mask, width, height, bounds, visited);
+      if (region.touchesBorder || region.points.length < 8) continue;
+
+      const contour = traceSet(buildHoleBoundarySet(region.points, mask, width, height));
+      if (contour.points.length > 2) holes.push({ closed: contour.closed, points: contour.points });
     }
+  }
+
+  return holes.slice(0, 20);
+}
+
+function collectBackgroundRegion(startX, startY, mask, width, height, bounds, visited) {
+  const queue = [{ x: startX, y: startY }];
+  const points = [];
+  let touchesBorder = false;
+  visited.add(pointKey(startX, startY));
+
+  for (let index = 0; index < queue.length; index++) {
+    const point = queue[index];
+    points.push(point);
+    if (point.x === bounds.minX || point.x === bounds.maxX || point.y === bounds.minY || point.y === bounds.maxY) touchesBorder = true;
+
+    for (const direction of DIRECTIONS) {
+      const x = point.x + direction.x;
+      const y = point.y + direction.y;
+      if (x < bounds.minX || x > bounds.maxX || y < bounds.minY || y > bounds.maxY) continue;
+      const key = pointKey(x, y);
+      if (!visited.has(key) && !mask[y * width + x]) {
+        visited.add(key);
+        queue.push({ x, y });
+      }
+    }
+  }
+
+  return { points, touchesBorder };
+}
+
+function buildHoleBoundarySet(backgroundPoints, mask, width, height) {
+  const set = new Set();
+  for (const point of backgroundPoints) {
+    for (const direction of DIRECTIONS) {
+      const x = point.x + direction.x;
+      const y = point.y + direction.y;
+      if (x >= 0 && x < width && y >= 0 && y < height && mask[y * width + x]) set.add(pointKey(x, y));
+    }
+  }
+  return set;
+}
+
+function getBounds(pixels, width, height) {
+  let minX = width, minY = height, maxX = 0, maxY = 0;
+  for (const point of pixels) {
+    minX = Math.min(minX, point.x); minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function firstPoint(set) {
+  let first = null;
+  for (const key of set) {
+    const point = pointFromKey(key);
+    if (!first || point.y < first.y || (point.y === first.y && point.x < first.x)) first = point;
+  }
+  return first;
+}
+
+function isBoundary(x, y, mask, width, height) {
+  for (const direction of DIRECTIONS) {
+    const xx = x + direction.x;
+    const yy = y + direction.y;
+    if (xx < 0 || xx >= width || yy < 0 || yy >= height || !mask[yy * width + xx]) return true;
   }
   return false;
 }
