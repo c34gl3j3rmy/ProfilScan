@@ -6,11 +6,11 @@ import { zernikeLikeScore } from './zernike.js';
 import { fuseScores } from './score-fusion.js';
 
 const DEFAULT_WEIGHTS = {
-  ratio: 0.20,
-  radial: 0.18,
-  hu: 0.16,
-  fourier: 0.14,
-  angle: 0.08,
+  ratio: 0.24,
+  radial: 0.17,
+  hu: 0.15,
+  fourier: 0.13,
+  angle: 0.07,
   fill: 0.04,
   advanced: 0.20
 };
@@ -151,8 +151,10 @@ function emptyScore() {
 }
 
 function compareRatio(a, b) {
-  if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return 0;
-  const distance = Math.abs(Math.log(a / b));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  const directDistance = Math.abs(a - b);
+  const rotatedDistance = Math.abs(a + b);
+  const distance = Math.min(directDistance, rotatedDistance);
   return clampScore(100 * (1 - distance / Math.log(4)));
 }
 
