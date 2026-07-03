@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.1.9';
+const CACHE_NAME = 'profilscan-v1.2.1';
 const ASSETS = [
   './',
   './index.html',
@@ -14,6 +14,14 @@ const ASSETS = [
   './src/storage/indexed-db.js',
   './src/shape-engine/signature-builder.js',
   './src/shape-engine/candidate-search.js',
+  './src/shape-engine/advanced-matching.js',
+  './src/shape-engine/score-fusion.js',
+  './src/shape-engine/shape-normalizer.js',
+  './src/shape-engine/hausdorff.js',
+  './src/shape-engine/shape-context.js',
+  './src/shape-engine/icp.js',
+  './src/shape-engine/ransac.js',
+  './src/shape-engine/zernike.js',
   './src/workers/import-worker.js',
   './src/workers/analysis-worker.js',
   './src/workers/contour-tracer.js',
