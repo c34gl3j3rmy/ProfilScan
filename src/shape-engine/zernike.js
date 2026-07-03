@@ -1,3 +1,5 @@
+import { normalizePoints } from './shape-normalizer.js';
+
 export function zernikeLikeScore(pointsA, pointsB) {
   if (!pointsA?.length || !pointsB?.length) return 0;
   const first = zernikeLikeDescriptor(pointsA);
@@ -8,7 +10,7 @@ export function zernikeLikeScore(pointsA, pointsB) {
 }
 
 export function zernikeLikeDescriptor(points) {
-  const normalized = normalize(points);
+  const normalized = normalizePoints(points).filter(point => Math.hypot(point.x, point.y) <= 1.25);
   const orders = [2, 3, 4, 5, 6, 7, 8, 9];
   return orders.map(order => radialMoment(normalized, order));
 }
@@ -22,16 +24,4 @@ function radialMoment(points, order) {
     sum += Math.pow(radius, order) * Math.abs(Math.cos(order * angle));
   }
   return sum / points.length;
-}
-
-function normalize(points) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const point of points) {
-    minX = Math.min(minX, point.x); minY = Math.min(minY, point.y);
-    maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y);
-  }
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const scale = Math.max(maxX - minX, maxY - minY) / 2 || 1;
-  return points.map(point => ({ x: (point.x - cx) / scale, y: (point.y - cy) / scale })).filter(point => Math.hypot(point.x, point.y) <= 1.25);
 }
