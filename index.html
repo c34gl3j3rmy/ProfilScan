@@ -66,8 +66,14 @@
 
     <section id="screenResult" class="card hidden">
       <h2>Resultat</h2>
-      <p id="detectedCount"></p>
-      <canvas id="resultCanvas"></canvas>
+      <div id="resultVisionPanel" class="vision-panel">
+        <p id="detectedCount"></p>
+        <canvas id="resultCanvas"></canvas>
+        <div class="vision-actions">
+          <button id="compactVisionButton" class="button ghost compact-button">Image compacte</button>
+          <button id="cropImageButton" class="button ghost compact-button">Recadrer</button>
+        </div>
+      </div>
       <ol id="resultList"></ol>
       <button id="copyAnalysisReportButton" class="button ghost">Copier le rapport d'analyse</button>
 
