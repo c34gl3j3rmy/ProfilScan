@@ -28,12 +28,25 @@
       <button id="cameraButton" class="button primary">Prendre une photo</button>
       <label class="button secondary">
         Importer une image
-        <input id="imageInput" type="file" accept="image/*" hidden>
+        <input id="imageInput" type="file" accept="image/*,.svg,image/svg+xml" hidden>
       </label>
       <label class="button ghost">
         Remplacer la base
         <input id="replaceProfileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
       </label>
+      <button id="refreshAppButton" class="button ghost">Actualiser l'application<br><small>Recharge les fichiers de ProfilScan</small></button>
+      <button id="signatureDebugButton" class="button ghost">Voir signatures profils de la base</button>
+    </section>
+
+    <section id="screenSignature" class="card hidden">
+      <h2>Signatures profils</h2>
+      <p class="hint">Selectionne une reference pour copier sa signature et la comparer avec une analyse.</p>
+      <input id="signatureSearchInput" class="text-input" list="profileReferenceList" placeholder="Reference attendue, ex. PR10">
+      <datalist id="profileReferenceList"></datalist>
+      <button id="showSignatureButton" class="button secondary">Afficher la signature</button>
+      <textarea id="signatureOutput" class="debug-textarea" readonly placeholder="La signature du profil apparaitra ici."></textarea>
+      <button id="copySignatureButton" class="button ghost">Copier la signature</button>
+      <button id="closeSignatureButton" class="button primary">Retour</button>
     </section>
 
     <section id="screenCamera" class="card hidden">
@@ -59,7 +72,10 @@
 
       <details id="debugSettings" class="debug-panel" open>
         <summary>Reglages</summary>
-        <p class="hint">Rouge = contours detectes. Vert = formes continues retenues. Les reglages relancent l'analyse en direct.</p>
+        <p class="hint">Rouge = contours detectes. Vert = formes continues retenues. Bleu = trous detectes. Les reglages relancent l'analyse en direct.</p>
+
+        <h3>Profil attendu</h3>
+        <input id="expectedProfileInput" class="text-input" list="profileReferenceList" placeholder="Ex. PR10">
 
         <h3>Image</h3>
         <label class="range-row">Luminosite <output id="brightnessValue">0</output>
