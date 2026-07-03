@@ -16,13 +16,12 @@ export async function buildRasterizedShapeFingerprint(profile, pipelineSettings 
     width: bounds.width + pad * 2,
     height: bounds.height + pad * 2
   };
-  const svg = buildSvg(pathText, viewBox);
-  const bitmap = await createImageBitmap(new Blob([svg], { type: 'image/svg+xml' }));
+
   const canvas = new OffscreenCanvas(rasterSize, rasterSize);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, rasterSize, rasterSize);
-  ctx.drawImage(bitmap, 0, 0, rasterSize, rasterSize);
+  drawPathToCanvas(ctx, pathText, viewBox, rasterSize);
 
   const imageData = ctx.getImageData(0, 0, rasterSize, rasterSize);
   const mask = buildBlackMask(imageData.data, rasterSize, rasterSize);
@@ -39,15 +38,27 @@ export async function buildRasterizedShapeFingerprint(profile, pipelineSettings 
   }, settings);
 
   fingerprint.reference = profile.reference;
-  fingerprint.summary.source = 'svg-raster';
+  fingerprint.summary.source = 'svg-raster-path2d';
   fingerprint.summary.rasterSize = rasterSize;
   fingerprint.summary.rasterBlackPixels = countMask(mask);
   fingerprint.summary.rasterBoundaryPoints = points.length;
   return fingerprint;
 }
 
-function buildSvg(pathText, viewBox) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}"><rect x="${viewBox.x}" y="${viewBox.y}" width="${viewBox.width}" height="${viewBox.height}" fill="white"/><path d="${escapeXml(pathText)}" fill="black" stroke="black" stroke-width="0" fill-rule="evenodd"/></svg>`;
+function drawPathToCanvas(ctx, pathText, viewBox, rasterSize) {
+  if (typeof Path2D === 'undefined') throw new Error('Path2D indisponible dans ce navigateur.');
+
+  const scale = rasterSize / Math.max(viewBox.width, viewBox.height);
+  const offsetX = (rasterSize - viewBox.width * scale) / 2;
+  const offsetY = (rasterSize - viewBox.height * scale) / 2;
+
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+  ctx.translate(-viewBox.x, -viewBox.y);
+  ctx.fillStyle = '#000000';
+  ctx.fill(new Path2D(pathText), 'evenodd');
+  ctx.restore();
 }
 
 function buildBlackMask(data, width, height) {
@@ -164,8 +175,4 @@ function resolvePoint(x, y, current, relative) {
 function readNumber(tokens, index) {
   const value = Number(tokens[index]);
   return Number.isFinite(value) ? value : 0;
-}
-
-function escapeXml(value) {
-  return String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[char]));
 }
