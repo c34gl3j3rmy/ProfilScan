@@ -34,6 +34,7 @@ const signatureOutput = document.querySelector('#signatureOutput');
 const visionPanel = document.querySelector('#resultVisionPanel');
 const compactVisionButton = document.querySelector('#compactVisionButton');
 const cropImageButton = document.querySelector('#cropImageButton');
+const resultCanvas = document.querySelector('#resultCanvas');
 const video = document.querySelector('#cameraPreview');
 const analysisStatus = document.querySelector('#analysisStatus');
 const analysisProgress = document.querySelector('#analysisProgress');
@@ -62,6 +63,10 @@ let sourceImage = null;
 let lastResult = null;
 let liveTimer = null;
 let liveRun = 0;
+let cropMode = false;
+let cropStart = null;
+let cropBox = null;
+let cropDragging = false;
 
 Object.values(inputs).forEach(input => {
   if (input) input.addEventListener('input', scheduleLiveAnalysis);
@@ -175,6 +180,7 @@ function analyzeWithSettings(progress) {
 
 async function analyzeImage(imageBitmap) {
   sourceImage = imageBitmap;
+  exitCropMode();
   show('analysis');
   resetProgress('Analyse de l image');
   setProgress(10, 'Preparation de l image', 'Image chargee');
@@ -287,7 +293,8 @@ function buildAnalysisReport() {
       height: lastResult.height,
       detectedItems: lastResult.items?.length || 0,
       contours: lastResult.debug?.contours?.length || 0,
-      holes: (lastResult.debug?.contours || []).reduce((sum, contour) => sum + (contour.holes?.length || 0), 0)
+      holes: (lastResult.debug?.contours || []).reduce((sum, contour) => sum + (contour.holes?.length || 0), 0),
+      crop: cropBox
     },
     settings: lastResult.settings,
     expectedProfile: expected ? buildSignatureExport(expected) : null,
@@ -345,10 +352,117 @@ function toggleCompactVision() {
   compactVisionButton.textContent = active ? 'Image normale' : 'Image compacte';
 }
 
-function showCropComingSoon() {
-  if (!cropImageButton) return;
-  cropImageButton.textContent = 'Recadrage bientôt';
-  setTimeout(() => { cropImageButton.textContent = 'Recadrer'; }, 1400);
+async function toggleCropMode() {
+  if (!sourceImage) return;
+  if (cropMode && cropBox) {
+    await applyCrop();
+    return;
+  }
+  cropMode = !cropMode;
+  cropBox = null;
+  cropStart = null;
+  cropDragging = false;
+  resultCanvas?.classList.toggle('crop-mode', cropMode);
+  cropImageButton.textContent = cropMode ? 'Trace la zone' : 'Recadrer';
+  if (lastResult) renderResults(lastResult);
+}
+
+function exitCropMode() {
+  cropMode = false;
+  cropStart = null;
+  cropDragging = false;
+  cropBox = null;
+  resultCanvas?.classList.remove('crop-mode');
+  if (cropImageButton) cropImageButton.textContent = 'Recadrer';
+}
+
+function startCrop(event) {
+  if (!cropMode || !lastResult) return;
+  cropDragging = true;
+  cropStart = canvasPoint(event);
+  cropBox = { x: cropStart.x, y: cropStart.y, width: 0, height: 0 };
+  resultCanvas.setPointerCapture(event.pointerId);
+}
+
+function moveCrop(event) {
+  if (!cropMode || !cropDragging || !cropStart || !lastResult) return;
+  const point = canvasPoint(event);
+  cropBox = normalizeCropBox(cropStart, point);
+  renderCropPreview();
+}
+
+function endCrop() {
+  if (!cropMode || !cropDragging) return;
+  cropDragging = false;
+  if (!cropBox || cropBox.width < 20 || cropBox.height < 20) {
+    cropBox = null;
+    cropImageButton.textContent = 'Trace la zone';
+    if (lastResult) renderResults(lastResult);
+    return;
+  }
+  cropImageButton.textContent = 'Appliquer recadrage';
+  renderCropPreview();
+}
+
+async function applyCrop() {
+  if (!cropBox || !sourceImage) return;
+  const cropped = await createCroppedBitmap(sourceImage, cropBox);
+  await analyzeImage(cropped);
+}
+
+async function createCroppedBitmap(imageBitmap, box) {
+  const width = Math.max(1, Math.round(box.width));
+  const height = Math.max(1, Math.round(box.height));
+  const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(imageBitmap, Math.round(box.x), Math.round(box.y), width, height, 0, 0, width, height);
+  return createImageBitmap(canvas);
+}
+
+function renderCropPreview() {
+  renderResults(lastResult);
+  const ctx = resultCanvas.getContext('2d');
+  ctx.save();
+  ctx.fillStyle = 'rgba(15,23,42,.35)';
+  ctx.fillRect(0, 0, resultCanvas.width, resultCanvas.height);
+  if (cropBox) {
+    ctx.clearRect(cropBox.x, cropBox.y, cropBox.width, cropBox.height);
+    renderResults(lastResult);
+    ctx.save();
+    ctx.fillStyle = 'rgba(15,23,42,.35)';
+    ctx.fillRect(0, 0, resultCanvas.width, cropBox.y);
+    ctx.fillRect(0, cropBox.y + cropBox.height, resultCanvas.width, resultCanvas.height - cropBox.y - cropBox.height);
+    ctx.fillRect(0, cropBox.y, cropBox.x, cropBox.height);
+    ctx.fillRect(cropBox.x + cropBox.width, cropBox.y, resultCanvas.width - cropBox.x - cropBox.width, cropBox.height);
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = Math.max(2, resultCanvas.width / 350);
+    ctx.strokeRect(cropBox.x, cropBox.y, cropBox.width, cropBox.height);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function canvasPoint(event) {
+  const rect = resultCanvas.getBoundingClientRect();
+  const x = (event.clientX - rect.left) * (resultCanvas.width / rect.width);
+  const y = (event.clientY - rect.top) * (resultCanvas.height / rect.height);
+  return {
+    x: Math.max(0, Math.min(resultCanvas.width, x)),
+    y: Math.max(0, Math.min(resultCanvas.height, y))
+  };
+}
+
+function normalizeCropBox(a, b) {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.abs(b.x - a.x),
+    height: Math.abs(b.y - a.y)
+  };
 }
 
 function roundArray(values) {
@@ -373,7 +487,11 @@ showSignatureButton?.addEventListener('click', showSignature);
 copySignatureButton?.addEventListener('click', copySignatureOutput);
 copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
 compactVisionButton?.addEventListener('click', toggleCompactVision);
-cropImageButton?.addEventListener('click', showCropComingSoon);
+cropImageButton?.addEventListener('click', toggleCropMode);
+resultCanvas?.addEventListener('pointerdown', startCrop);
+resultCanvas?.addEventListener('pointermove', moveCrop);
+resultCanvas?.addEventListener('pointerup', endCrop);
+resultCanvas?.addEventListener('pointercancel', endCrop);
 closeSignatureButton?.addEventListener('click', () => show('home'));
 signatureSearchInput?.addEventListener('keydown', event => { if (event.key === 'Enter') showSignature(); });
 
