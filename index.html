@@ -34,8 +34,39 @@
         Remplacer la base
         <input id="replaceProfileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
       </label>
+      <button id="pipelineSettingsButton" class="button ghost">Parametres du pipeline</button>
       <button id="refreshAppButton" class="button ghost">Actualiser l'application<br><small>Recharge les fichiers de ProfilScan</small></button>
       <button id="signatureDebugButton" class="button ghost">Voir signatures profils de la base</button>
+    </section>
+
+    <section id="screenPipelineSettings" class="card hidden">
+      <h2>Parametres du pipeline</h2>
+      <p class="hint">Ces reglages doivent etre communs a l'import de la base et a l'analyse des photos.</p>
+
+      <h3>Profil temoin</h3>
+      <input id="pipelineReferenceInput" class="text-input" list="profileReferenceList" placeholder="Reference, ex. PR10">
+      <div class="vision-actions">
+        <button id="pipelineRandomProfileButton" class="button secondary compact-button">Profil aleatoire</button>
+        <button id="pipelineShowProfileButton" class="button ghost compact-button">Afficher</button>
+      </div>
+      <p id="pipelinePreviewStatus" class="hint">Choisis un profil pour previsualiser ses signatures.</p>
+
+      <h3>Signature commune</h3>
+      <label class="range-row">Grille matiere <output id="pipelineFillGridValue">96</output> px
+        <input id="pipelineFillGridInput" type="range" min="32" max="256" step="8" value="96">
+        <small>Plus la grille est grande, plus le remplissage est precis mais plus l'import est lent.</small>
+      </label>
+      <label class="range-row">Points contour <output id="pipelineContourPointValue">240</output>
+        <input id="pipelineContourPointInput" type="range" min="80" max="800" step="20" value="240">
+        <small>Utilise pour Fourier, Shape Context et les comparaisons avancees.</small>
+      </label>
+      <label class="range-row">Simplification contour <output id="pipelineSimplifyValue">0.010</output>
+        <input id="pipelineSimplifyInput" type="range" min="0" max="80" value="10">
+        <small>Gauche = conserve plus de details · droite = lisse davantage.</small>
+      </label>
+
+      <textarea id="pipelinePreviewOutput" class="debug-textarea" readonly placeholder="L'aperçu du profil temoin apparaitra ici."></textarea>
+      <button id="closePipelineSettingsButton" class="button primary">Retour</button>
     </section>
 
     <section id="screenSignature" class="card hidden">
