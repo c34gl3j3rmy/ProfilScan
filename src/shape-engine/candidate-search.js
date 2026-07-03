@@ -6,22 +6,24 @@ import { zernikeLikeScore } from './zernike.js';
 import { fuseScores } from './score-fusion.js';
 
 const DEFAULT_WEIGHTS = {
-  ratio: 0.24,
-  radial: 0.17,
-  hu: 0.15,
-  fourier: 0.13,
-  angle: 0.07,
+  ratio: 0.28,
+  radial: 0.18,
+  hu: 0.16,
+  fourier: 0.16,
+  angle: 0.08,
   fill: 0.04,
-  advanced: 0.20
+  advanced: 0.35
 };
 
 const ADVANCED_WEIGHTS = {
-  hausdorff: 0.25,
-  shapeContext: 0.25,
-  icp: 0.20,
-  ransac: 0.10,
-  zernike: 0.20
+  hausdorff: 0.30,
+  shapeContext: 0.30,
+  icp: 0.25,
+  ransac: 0.05,
+  zernike: 0.10
 };
+
+const BASE_WEIGHT_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill'];
 
 export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
   return findTopMatches(detectedFingerprint, collection, customWeights, 1)[0] || null;
@@ -48,18 +50,22 @@ export function compareFingerprintsDetailed(detected, reference, customWeights =
 }
 
 function compareProfileDetailed(detected, profile, customWeights = null) {
-  const base = compareBaseFingerprintScores(detected, profile.fingerprint, customWeights);
+  const weights = normalizeWeights(customWeights || DEFAULT_WEIGHTS);
+  const base = compareBaseFingerprintScores(detected, profile.fingerprint, weights);
   const advanced = compareAdvancedScores(detected, profile);
   if (!advanced) return base;
 
-  const weights = normalizeWeights(customWeights || DEFAULT_WEIGHTS);
-  const score = base.score * (1 - weights.advanced) + advanced.score * weights.advanced;
+  const ratioGate = computeRatioGate(base.subscores.ratio);
+  const advancedScore = advanced.score * ratioGate;
+  const score = base.score * (1 - weights.advanced) + advancedScore * weights.advanced;
 
   return {
     score: clampScore(score),
     subscores: {
       ...base.subscores,
-      advanced: Math.round(advanced.score),
+      advanced: Math.round(advancedScore),
+      advancedRaw: Math.round(advanced.score),
+      ratioGate: Math.round(ratioGate * 100),
       ...advanced.subscores
     },
     weights: {
@@ -73,13 +79,13 @@ function compareProfileDetailed(detected, profile, customWeights = null) {
 function compareBaseFingerprintScores(detected, reference, customWeights = null) {
   if (!reference) return emptyScore();
 
+  const weights = isNormalizedWeightSet(customWeights) ? customWeights : normalizeWeights(customWeights || DEFAULT_WEIGHTS);
   const ratioScore = compareRatio(detected.summary?.normalizedRatio ?? detected.normalizedRatio, reference.summary?.normalizedRatio);
   const radialScore = compareVectors(detected.descriptors?.radial, reference.descriptors?.radial, 1);
   const angleScore = compareVectors(detected.descriptors?.angleHistogram, reference.descriptors?.angleHistogram, 1);
   const huScore = compareVectors(detected.descriptors?.hu, reference.descriptors?.hu, 20);
   const fourierScore = compareVectors(detected.descriptors?.fourier, reference.descriptors?.fourier, 1.4);
   const fillScore = compareFillRatio(detected.summary?.fillRatio ?? detected.fillRatio);
-  const weights = normalizeWeights(customWeights || DEFAULT_WEIGHTS);
 
   const score =
     ratioScore * weights.ratio +
@@ -113,7 +119,7 @@ function compareAdvancedScores(detected, profile) {
       hausdorff: hausdorffScore(detectedPoints, referencePoints),
       shapeContext: shapeContextScore(detectedPoints, referencePoints),
       icp: icpScore(detectedPoints, referencePoints),
-      ransac: (ransacLineScore(detectedPoints) + ransacLineScore(referencePoints)) / 2,
+      ransac: Math.min(ransacLineScore(detectedPoints), ransacLineScore(referencePoints)),
       zernike: zernikeLikeScore(detectedPoints, referencePoints)
     },
     ADVANCED_WEIGHTS
@@ -121,20 +127,32 @@ function compareAdvancedScores(detected, profile) {
 }
 
 function normalizeWeights(weights) {
-  const safeWeights = {
-    ratio: positiveNumber(weights.ratio),
-    radial: positiveNumber(weights.radial),
-    hu: positiveNumber(weights.hu),
-    fourier: positiveNumber(weights.fourier),
-    angle: positiveNumber(weights.angle),
-    fill: positiveNumber(weights.fill),
-    advanced: positiveNumber(weights.advanced)
+  const baseWeights = Object.fromEntries(BASE_WEIGHT_KEYS.map(key => [key, positiveNumber(weights?.[key])]));
+  const baseTotal = Object.values(baseWeights).reduce((sum, value) => sum + value, 0);
+  const fallbackTotal = BASE_WEIGHT_KEYS.reduce((sum, key) => sum + DEFAULT_WEIGHTS[key], 0);
+
+  const normalizedBase = Object.fromEntries(BASE_WEIGHT_KEYS.map(key => {
+    const value = baseTotal > 0 ? baseWeights[key] / baseTotal : DEFAULT_WEIGHTS[key] / fallbackTotal;
+    return [key, value];
+  }));
+
+  return {
+    ...normalizedBase,
+    advanced: clampUnit(Number.isFinite(Number(weights?.advanced)) ? Number(weights.advanced) : DEFAULT_WEIGHTS.advanced)
   };
+}
 
-  const total = Object.values(safeWeights).reduce((sum, value) => sum + value, 0);
-  if (total <= 0) return DEFAULT_WEIGHTS;
+function isNormalizedWeightSet(weights) {
+  if (!weights) return false;
+  return BASE_WEIGHT_KEYS.every(key => Number.isFinite(weights[key])) && Number.isFinite(weights.advanced);
+}
 
-  return Object.fromEntries(Object.entries(safeWeights).map(([key, value]) => [key, value / total]));
+function computeRatioGate(ratioScore) {
+  if (!Number.isFinite(ratioScore)) return 1;
+  if (ratioScore >= 85) return 1;
+  if (ratioScore >= 70) return 0.85;
+  if (ratioScore >= 55) return 0.65;
+  return 0.45;
 }
 
 function positiveNumber(value) {
@@ -155,7 +173,7 @@ function compareRatio(a, b) {
   const directDistance = Math.abs(a - b);
   const rotatedDistance = Math.abs(a + b);
   const distance = Math.min(directDistance, rotatedDistance);
-  return clampScore(100 * (1 - distance / Math.log(4)));
+  return clampScore(100 * (1 - distance / Math.log(2)));
 }
 
 function compareVectors(a, b, distanceScale = 1) {
@@ -181,4 +199,8 @@ function compareFillRatio(fillRatio) {
 
 function clampScore(score) {
   return Math.max(0, Math.min(100, score));
+}
+
+function clampUnit(value) {
+  return Math.max(0, Math.min(0.75, value));
 }
