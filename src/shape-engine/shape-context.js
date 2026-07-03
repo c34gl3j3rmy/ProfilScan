@@ -1,7 +1,9 @@
+import { normalizePoints, samplePoints } from './shape-normalizer.js';
+
 export function shapeContextScore(pointsA, pointsB) {
   if (!pointsA?.length || !pointsB?.length) return 0;
-  const first = histogram(sample(normalize(pointsA), 48));
-  const second = histogram(sample(normalize(pointsB), 48));
+  const first = histogram(samplePoints(normalizePoints(pointsA), 48));
+  const second = histogram(samplePoints(normalizePoints(pointsB), 48));
   let distance = 0;
   for (let i = 0; i < first.length; i++) distance += Math.abs(first[i] - second[i]);
   return Math.max(0, Math.min(100, 100 * (1 - distance)));
@@ -21,22 +23,4 @@ function histogram(points) {
   }
   const total = bins.reduce((sum, value) => sum + value, 0) || 1;
   return bins.map(value => value / total);
-}
-
-function sample(points, count) {
-  if (points.length <= count) return points;
-  const step = points.length / count;
-  return Array.from({ length: count }, (_, index) => points[Math.floor(index * step)]);
-}
-
-function normalize(points) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const point of points) {
-    minX = Math.min(minX, point.x); minY = Math.min(minY, point.y);
-    maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y);
-  }
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const scale = Math.max(maxX - minX, maxY - minY) || 1;
-  return points.map(point => ({ x: (point.x - cx) / scale, y: (point.y - cy) / scale }));
 }
