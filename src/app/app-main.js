@@ -2,6 +2,7 @@ import { startCamera, stopCamera, captureFrame } from './camera.js';
 import { loadImageFile } from './image-import.js';
 import { renderResults } from './render-results.js';
 import { bindRange, buildSettings } from './settings-reader.js';
+import { computeAutoImageSettings, applyAutoImageSettings } from './auto-settings.js';
 import { getCollection, saveCollection } from '../storage/indexed-db.js';
 
 const screens = {
@@ -61,6 +62,7 @@ let analysisWorker = null;
 let importWorker = null;
 let sourceImage = null;
 let lastResult = null;
+let lastAutoSettings = null;
 let liveTimer = null;
 let liveRun = 0;
 let cropMode = false;
@@ -183,7 +185,10 @@ async function analyzeImage(imageBitmap) {
   exitCropMode();
   show('analysis');
   resetProgress('Analyse de l image');
-  setProgress(10, 'Preparation de l image', 'Image chargee');
+  setProgress(6, 'Auto-reglage', 'Calcul des seuils image');
+  lastAutoSettings = await computeAutoImageSettings(imageBitmap);
+  applyAutoImageSettings(inputs, lastAutoSettings);
+  setProgress(10, 'Preparation de l image', `Seuil contour auto : ${lastAutoSettings.edgeQuantile} %`);
   const result = await analyzeWithSettings(true);
   lastResult = result;
   setProgress(100, 'Resultat pret', 'Affichage des detections', 'done');
@@ -296,6 +301,7 @@ function buildAnalysisReport() {
       holes: (lastResult.debug?.contours || []).reduce((sum, contour) => sum + (contour.holes?.length || 0), 0),
       crop: cropBox
     },
+    autoSettings: lastAutoSettings,
     settings: lastResult.settings,
     expectedProfile: expected ? buildSignatureExport(expected) : null,
     bestMatch: best,
