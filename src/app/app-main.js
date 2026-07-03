@@ -4,6 +4,8 @@ import { renderResults } from './render-results.js';
 import { bindRange, buildSettings } from './settings-reader.js';
 import { computeAutoImageSettings, applyAutoImageSettings } from './auto-settings.js';
 import { getCollection, saveCollection } from '../storage/indexed-db.js';
+import { buildShapeFingerprint } from '../shape-engine/signature-builder.js';
+import { DEFAULT_PIPELINE_SETTINGS, normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
 
 const screens = {
   noBase: document.querySelector('#screenNoBase'),
@@ -11,7 +13,8 @@ const screens = {
   camera: document.querySelector('#screenCamera'),
   analysis: document.querySelector('#screenAnalysis'),
   result: document.querySelector('#screenResult'),
-  signature: document.querySelector('#screenSignature')
+  signature: document.querySelector('#screenSignature'),
+  pipelineSettings: document.querySelector('#screenPipelineSettings')
 };
 
 const baseStatus = document.querySelector('#baseStatus');
@@ -24,6 +27,13 @@ const cancelCameraButton = document.querySelector('#cancelCameraButton');
 const newAnalysisButton = document.querySelector('#newAnalysisButton');
 const refreshAppButton = document.querySelector('#refreshAppButton');
 const signatureDebugButton = document.querySelector('#signatureDebugButton');
+const pipelineSettingsButton = document.querySelector('#pipelineSettingsButton');
+const pipelineReferenceInput = document.querySelector('#pipelineReferenceInput');
+const pipelineRandomProfileButton = document.querySelector('#pipelineRandomProfileButton');
+const pipelineShowProfileButton = document.querySelector('#pipelineShowProfileButton');
+const pipelinePreviewStatus = document.querySelector('#pipelinePreviewStatus');
+const pipelinePreviewOutput = document.querySelector('#pipelinePreviewOutput');
+const closePipelineSettingsButton = document.querySelector('#closePipelineSettingsButton');
 const signatureSearchInput = document.querySelector('#signatureSearchInput');
 const expectedProfileInput = document.querySelector('#expectedProfileInput');
 const profileReferenceList = document.querySelector('#profileReferenceList');
@@ -58,6 +68,12 @@ const inputs = {
   weightFill: bindRange('weightFillInput', 'weightFillValue', value => value)
 };
 
+const pipelineInputs = {
+  fillGridSize: bindRange('pipelineFillGridInput', 'pipelineFillGridValue', value => value),
+  contourPointCount: bindRange('pipelineContourPointInput', 'pipelineContourPointValue', value => value),
+  simplifyEpsilon: bindRange('pipelineSimplifyInput', 'pipelineSimplifyValue', value => (value / 1000).toFixed(3))
+};
+
 let collection = null;
 let analysisWorker = null;
 let importWorker = null;
@@ -70,9 +86,15 @@ let cropMode = false;
 let cropStart = null;
 let cropBox = null;
 let cropDragging = false;
+let currentPipelineSettings = normalizePipelineSettings(DEFAULT_PIPELINE_SETTINGS);
+let pipelinePreviewTimer = null;
 
 Object.values(inputs).forEach(input => {
   if (input) input.addEventListener('input', scheduleLiveAnalysis);
+});
+
+Object.values(pipelineInputs).forEach(input => {
+  if (input) input.addEventListener('input', schedulePipelinePreview);
 });
 
 function show(name) {
@@ -125,6 +147,8 @@ async function boot() {
     show('noBase');
     return;
   }
+  currentPipelineSettings = normalizePipelineSettings(collection.pipelineSettings || DEFAULT_PIPELINE_SETTINGS);
+  applyPipelineSettingsToInputs(currentPipelineSettings);
   baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
   populateProfileReferenceList();
   show('home');
@@ -164,7 +188,9 @@ async function importBaseFromFile(file) {
   try {
     setProgress(5, 'Lecture du fichier', `Fichier : ${file.name}`);
     const text = await file.text();
-    collection = await runWorker(getImportWorker(), { type: 'import-dataprofils', text }, true);
+    collection = await runWorker(getImportWorker(), { type: 'import-dataprofils', text, pipelineSettings: currentPipelineSettings }, true);
+    currentPipelineSettings = normalizePipelineSettings(collection.pipelineSettings || currentPipelineSettings);
+    applyPipelineSettingsToInputs(currentPipelineSettings);
     setProgress(92, 'Enregistrement local', 'Stockage IndexedDB');
     await saveCollection(collection);
     populateProfileReferenceList();
@@ -178,6 +204,7 @@ async function importBaseFromFile(file) {
 
 function analyzeWithSettings(progress) {
   const settings = buildSettings(inputs);
+  settings.pipelineSettings = currentPipelineSettings;
   return runWorker(getAnalysisWorker(), { type: 'analyze', imageBitmap: sourceImage, collection, settings }, progress);
 }
 
@@ -264,7 +291,7 @@ function showSignature() {
   signatureOutput.value = JSON.stringify(buildSignatureExport(profile), null, 2);
 }
 
-function buildSignatureExport(profile) {
+function buildSignatureExport(profile, fingerprint = profile.fingerprint) {
   return {
     reference: profile.reference,
     designation: profile.designation,
@@ -272,21 +299,77 @@ function buildSignatureExport(profile) {
       width: profile.width,
       height: profile.height,
       ratio: profile.ratio,
-      normalizedRatio: profile.fingerprint?.summary?.normalizedRatio
+      normalizedRatio: fingerprint?.summary?.normalizedRatio
     },
-    summary: profile.fingerprint?.summary,
+    pipelineSettings: fingerprint?.pipelineSettings || profile.pipelineSettings || collection?.pipelineSettings || currentPipelineSettings,
+    summary: fingerprint?.summary,
     subsignatures: {
-      radial: roundArray(profile.fingerprint?.descriptors?.radial),
-      angleHistogram: roundArray(profile.fingerprint?.descriptors?.angleHistogram),
-      hu: roundArray(profile.fingerprint?.descriptors?.hu),
-      fourier: roundArray(profile.fingerprint?.descriptors?.fourier),
-      points: (profile.fingerprint?.descriptors?.points || []).slice(0, 80)
+      radial: roundArray(fingerprint?.descriptors?.radial),
+      angleHistogram: roundArray(fingerprint?.descriptors?.angleHistogram),
+      hu: roundArray(fingerprint?.descriptors?.hu),
+      fourier: roundArray(fingerprint?.descriptors?.fourier),
+      points: (fingerprint?.descriptors?.points || []).slice(0, 80)
     },
     dna: {
       topology: profile.dna?.topology,
       quality: profile.dna?.quality
     }
   };
+}
+
+function openPipelineSettingsScreen() {
+  populateProfileReferenceList();
+  applyPipelineSettingsToInputs(currentPipelineSettings);
+  if (!pipelineReferenceInput.value && collection?.profiles?.length) selectRandomPipelineProfile();
+  else updatePipelinePreview();
+  show('pipelineSettings');
+}
+
+function buildPipelineSettingsFromInputs() {
+  currentPipelineSettings = normalizePipelineSettings({
+    ...currentPipelineSettings,
+    fillGridSize: pipelineInputs.fillGridSize?.value,
+    contourPointCount: pipelineInputs.contourPointCount?.value,
+    simplifyEpsilon: (Number(pipelineInputs.simplifyEpsilon?.value) || 0) / 1000
+  });
+  return currentPipelineSettings;
+}
+
+function applyPipelineSettingsToInputs(settings) {
+  const normalized = normalizePipelineSettings(settings);
+  if (pipelineInputs.fillGridSize) pipelineInputs.fillGridSize.value = normalized.fillGridSize;
+  if (pipelineInputs.contourPointCount) pipelineInputs.contourPointCount.value = normalized.contourPointCount;
+  if (pipelineInputs.simplifyEpsilon) pipelineInputs.simplifyEpsilon.value = Math.round(normalized.simplifyEpsilon * 1000);
+  Object.values(pipelineInputs).forEach(input => input?.dispatchEvent(new Event('input')));
+}
+
+function schedulePipelinePreview() {
+  clearTimeout(pipelinePreviewTimer);
+  pipelinePreviewTimer = setTimeout(updatePipelinePreview, 120);
+}
+
+function selectRandomPipelineProfile() {
+  if (!collection?.profiles?.length) return;
+  const profile = collection.profiles[Math.floor(Math.random() * collection.profiles.length)];
+  pipelineReferenceInput.value = profile.reference;
+  updatePipelinePreview();
+}
+
+function updatePipelinePreview() {
+  if (!pipelinePreviewOutput) return;
+  const settings = buildPipelineSettingsFromInputs();
+  const reference = pipelineReferenceInput?.value.trim().toLowerCase();
+  const profile = findProfile(reference) || collection?.profiles?.[0];
+
+  if (!profile) {
+    pipelinePreviewStatus.textContent = 'Aucun profil disponible.';
+    pipelinePreviewOutput.value = '';
+    return;
+  }
+
+  const fingerprint = buildShapeFingerprint(profile, settings);
+  pipelinePreviewStatus.textContent = `${profile.reference} - ${profile.designation || 'Sans designation'} · grille ${settings.fillGridSize} x ${settings.fillGridSize}`;
+  pipelinePreviewOutput.value = JSON.stringify(buildSignatureExport(profile, fingerprint), null, 2);
 }
 
 async function copySignatureOutput() {
@@ -313,10 +396,12 @@ function buildAnalysisReport() {
   return {
     type: 'ProfilScan analysis report',
     generatedAt: new Date().toISOString(),
+    pipelineSettings: currentPipelineSettings,
     base: {
       name: collection?.name,
       profiles: collection?.profiles?.length,
-      importedAt: collection?.importedAt
+      importedAt: collection?.importedAt,
+      pipelineSettings: collection?.pipelineSettings
     },
     image: {
       width: lastResult.width,
@@ -514,6 +599,10 @@ cancelCameraButton.addEventListener('click', () => { stopCamera(video); show('ho
 newAnalysisButton.addEventListener('click', () => show('home'));
 refreshAppButton?.addEventListener('click', refreshApplication);
 signatureDebugButton?.addEventListener('click', openSignatureScreen);
+pipelineSettingsButton?.addEventListener('click', openPipelineSettingsScreen);
+pipelineRandomProfileButton?.addEventListener('click', selectRandomPipelineProfile);
+pipelineShowProfileButton?.addEventListener('click', updatePipelinePreview);
+closePipelineSettingsButton?.addEventListener('click', () => show('home'));
 showSignatureButton?.addEventListener('click', showSignature);
 copySignatureButton?.addEventListener('click', copySignatureOutput);
 copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
@@ -526,5 +615,6 @@ resultCanvas?.addEventListener('pointerup', endCrop);
 resultCanvas?.addEventListener('pointercancel', endCrop);
 closeSignatureButton?.addEventListener('click', () => show('home'));
 signatureSearchInput?.addEventListener('keydown', event => { if (event.key === 'Enter') showSignature(); });
+pipelineReferenceInput?.addEventListener('keydown', event => { if (event.key === 'Enter') updatePipelinePreview(); });
 
 boot();
