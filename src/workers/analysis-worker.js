@@ -27,14 +27,18 @@ self.onmessage = async event => {
     const linkedEdges = dilate(edges, source.width, source.height, activeSettings.detection.linkRadius);
     postProgress(68, 'Recherche des objets', 'Composants connexes');
     const components = findComponents(linkedEdges, source.width, source.height);
-    postProgress(78, 'Suivi des contours', `${components.length} zones trouvees`);
+    postProgress(78, 'Hierarchie des contours', `${components.length} zones trouvees`);
     const objects = filterAndMergeComponents(components, source.width, source.height, activeSettings.detection)
       .map(object => scaleDetectedObject(object, source.scale));
     postProgress(88, 'Comparaison avec la base', `${objects.length} contours candidats`);
     const items = objects.map(object => matchObject(object, collection, activeSettings.weights));
     const debug = {
       edges: edgePoints,
-      contours: objects.map(object => ({ closed: object.closed, points: simplifyContourPoints(object.points, 180) }))
+      contours: objects.map(object => ({
+        closed: object.closed,
+        points: simplifyContourPoints(object.points, 180),
+        holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: simplifyContourPoints(hole.points, 120) }))
+      }))
     };
     postProgress(96, 'Annotation', `${items.length} profils detectes`);
     self.postMessage({ width: imageBitmap.width, height: imageBitmap.height, preview: imageBitmap, items, settings: activeSettings, debug }, [imageBitmap]);
@@ -122,7 +126,16 @@ function findComponents(mask, width, height) {
       }
     }
     const contour = traceBoundary(pixels, mask, width, height);
-    components.push({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1, area: count, closed: contour.closed, points: simplifyContourPoints(contour.points, 240) });
+    components.push({
+      x: minX,
+      y: minY,
+      width: maxX - minX + 1,
+      height: maxY - minY + 1,
+      area: count,
+      closed: contour.closed,
+      points: simplifyContourPoints(contour.points, 240),
+      holes: (contour.holes || []).map(hole => ({ closed: hole.closed, points: simplifyContourPoints(hole.points, 160) }))
+    });
   }
   return components;
 }
@@ -151,7 +164,7 @@ function filterAndMergeComponents(components, imageWidth, imageHeight, detection
   const groups = [];
   for (const component of candidates) {
     const group = groups.find(existing => areNear(existing, component, gap));
-    if (!group) groups.push({ ...component, points: [...component.points] });
+    if (!group) groups.push({ ...component, points: [...component.points], holes: [...(component.holes || [])] });
     else {
       const maxX = Math.max(group.x + group.width, component.x + component.width);
       const maxY = Math.max(group.y + group.height, component.y + component.height);
@@ -160,11 +173,12 @@ function filterAndMergeComponents(components, imageWidth, imageHeight, detection
       group.area += component.area;
       group.closed = group.closed || component.closed;
       group.points = simplifyContourPoints([...group.points, ...component.points], 320);
+      group.holes = [...(group.holes || []), ...(component.holes || [])];
     }
   }
   return groups
     .filter(group => group.width * group.height > imageArea * 0.002)
-    .map(group => ({ ...group, points: simplifyContourPoints(group.closed ? group.points : sortContourPoints(group.points), 240) }))
+    .map(group => ({ ...group, points: simplifyContourPoints(group.closed ? group.points : sortContourPoints(group.points), 240), holes: (group.holes || []).slice(0, 20) }))
     .sort((a, b) => b.width * b.height - a.width * a.height)
     .slice(0, 10)
     .sort((a, b) => a.y - b.y || a.x - b.x);
@@ -189,7 +203,16 @@ function areNear(a, b, gap) {
 }
 
 function scaleDetectedObject(object, scale) {
-  return { x: Math.round(object.x / scale), y: Math.round(object.y / scale), width: Math.round(object.width / scale), height: Math.round(object.height / scale), area: Math.round(object.area / (scale * scale)), closed: object.closed, points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })) };
+  return {
+    x: Math.round(object.x / scale),
+    y: Math.round(object.y / scale),
+    width: Math.round(object.width / scale),
+    height: Math.round(object.height / scale),
+    area: Math.round(object.area / (scale * scale)),
+    closed: object.closed,
+    points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })),
+    holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: hole.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })) }))
+  };
 }
 
 function matchObject(object, collection, weights) {
