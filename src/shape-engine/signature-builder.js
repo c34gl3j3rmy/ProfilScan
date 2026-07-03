@@ -1,9 +1,7 @@
-const RADIAL_BINS = 64;
-const FOURIER_TERMS = 16;
-const ANGLE_BINS = 16;
-const FILL_GRID_SIZE = 96;
+import { normalizePipelineSettings } from './pipeline-settings.js';
 
-export function buildShapeFingerprint(profile) {
+export function buildShapeFingerprint(profile, pipelineSettings = {}) {
+  const settings = normalizePipelineSettings(pipelineSettings);
   const points = sampleSvgPath(profile.svgPath || profile.paths || '');
   return buildFingerprint({
     reference: profile.reference,
@@ -13,13 +11,15 @@ export function buildShapeFingerprint(profile) {
     surface: profile.surface,
     perimeter: profile.perimeter,
     points,
-    source: 'svg'
+    source: 'svg',
+    pipelineSettings: settings
   });
 }
 
-export function buildShapeDNA(profile) {
+export function buildShapeDNA(profile, pipelineSettings = {}) {
+  const settings = normalizePipelineSettings(pipelineSettings);
   const points = sampleSvgPath(profile.svgPath || profile.paths || '');
-  const fingerprint = buildShapeFingerprint(profile);
+  const fingerprint = buildShapeFingerprint(profile, settings);
   const normalizedPoints = normalizePoints(points);
 
   return {
@@ -44,9 +44,10 @@ export function buildShapeDNA(profile) {
     },
     contour: {
       normalizedPoints,
-      simplifiedPoints: simplifyPoints(normalizedPoints, 0.01)
+      simplifiedPoints: simplifyPoints(normalizedPoints, settings.simplifyEpsilon)
     },
     descriptors: fingerprint.descriptors,
+    pipelineSettings: settings,
     quality: {
       source: 'svg',
       confidence: normalizedPoints.length ? 1 : 0.2,
@@ -55,14 +56,15 @@ export function buildShapeDNA(profile) {
   };
 }
 
-export function buildDetectedFingerprintFromBox(object) {
+export function buildDetectedFingerprintFromBox(object, pipelineSettings = {}) {
   return buildDetectedFingerprintFromPoints({
     ...object,
     points: rectanglePoints(object.width, object.height)
-  });
+  }, pipelineSettings);
 }
 
-export function buildDetectedFingerprintFromPoints(object) {
+export function buildDetectedFingerprintFromPoints(object, pipelineSettings = {}) {
+  const settings = normalizePipelineSettings(pipelineSettings);
   const ratio = object.width / object.height;
   return buildFingerprint({
     reference: 'detected',
@@ -73,18 +75,20 @@ export function buildDetectedFingerprintFromPoints(object) {
     perimeter: object.perimeter || 2 * (object.width + object.height),
     fillRatio: object.area ? object.area / (object.width * object.height) : 0,
     points: object.points?.length ? object.points : rectanglePoints(object.width, object.height),
-    source: object.points?.length ? 'contour' : 'box'
+    source: object.points?.length ? 'contour' : 'box',
+    pipelineSettings: settings
   });
 }
 
-function buildFingerprint({ reference, width, height, ratio, surface, perimeter, fillRatio = 0, points, source }) {
+function buildFingerprint({ reference, width, height, ratio, surface, perimeter, fillRatio = 0, points, source, pipelineSettings }) {
+  const settings = normalizePipelineSettings(pipelineSettings);
   const normalizedPoints = normalizePoints(points || []);
-  const compactPoints = simplifyPoints(normalizedPoints, 0.01).slice(0, 240);
-  const filledShape = buildFilledShape(normalizedPoints, FILL_GRID_SIZE);
-  const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
-  const angleHistogram = buildAngleHistogram(normalizedPoints, ANGLE_BINS);
+  const compactPoints = simplifyPoints(normalizedPoints, settings.simplifyEpsilon).slice(0, settings.contourPointCount);
+  const filledShape = buildFilledShape(normalizedPoints, settings.fillGridSize);
+  const radial = buildRadialSignature(normalizedPoints, settings.radialBins);
+  const angleHistogram = buildAngleHistogram(normalizedPoints, settings.angleBins);
   const hu = buildHuMoments(filledShape.points.length ? filledShape.points : normalizedPoints);
-  const fourier = buildFourierDescriptor(normalizedPoints, FOURIER_TERMS);
+  const fourier = buildFourierDescriptor(normalizedPoints, settings.fourierTerms);
   const effectiveFillRatio = filledShape.fillRatio || fillRatio;
   const values = [
     normalize(width, 200),
@@ -105,6 +109,7 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       normalizedPoints: compactPoints
     },
     descriptors: { radial, angleHistogram, hu, fourier, points: compactPoints },
+    pipelineSettings: settings,
     summary: {
       width,
       height,
@@ -115,7 +120,8 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       fillRatio: effectiveFillRatio,
       pointCount: normalizedPoints.length,
       source,
-      huSource: filledShape.points.length ? 'filled-mask' : 'contour'
+      huSource: filledShape.points.length ? settings.huSource : 'contour',
+      pipelineVersion: settings.version
     }
   };
 }
