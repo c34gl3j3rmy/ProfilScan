@@ -1,6 +1,8 @@
+import { normalizePoints } from './shape-normalizer.js';
+
 export function ransacLineScore(points, tries = 48, tolerance = 0.035) {
   if (!points?.length || points.length < 8) return 0;
-  const cloud = normalize(points);
+  const cloud = normalizePoints(points);
   let best = 0;
 
   for (let i = 0; i < tries; i++) {
@@ -19,16 +21,4 @@ export function ransacLineScore(points, tries = 48, tolerance = 0.035) {
   }
 
   return Math.max(0, Math.min(100, best * 100));
-}
-
-function normalize(points) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
-    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-  }
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const scale = Math.max(maxX - minX, maxY - minY) || 1;
-  return points.map(p => ({ x: (p.x - cx) / scale, y: (p.y - cy) / scale }));
 }
