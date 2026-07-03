@@ -26,6 +26,7 @@ body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; b
 .secondary { background: var(--secondary); color: var(--text); }
 .ghost { background: transparent; color: var(--text); border: 2px solid var(--secondary); }
 #cameraPreview, #resultCanvas { width: 100%; border-radius: 14px; background: #111; }
+#resultCanvas.crop-mode { cursor: crosshair; touch-action: none; outline: 3px solid #38bdf8; outline-offset: 3px; }
 .hint { color: var(--muted); font-size: .95rem; }
 
 .vision-panel {
