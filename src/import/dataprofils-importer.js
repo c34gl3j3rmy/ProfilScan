@@ -1,6 +1,8 @@
+import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
 import { buildShapeDNA, buildShapeFingerprint } from '../shape-engine/signature-builder.js';
 
-export async function importDataprofilsText(text, onProgress = () => {}) {
+export async function importDataprofilsText(text, onProgress = () => {}, pipelineSettings = {}) {
+  const settings = normalizePipelineSettings(pipelineSettings);
   report(onProgress, 22, 'Extraction de la base', 'Lecture du tableau Profils');
   const profiles = parseDataprofils(text);
 
@@ -31,8 +33,8 @@ export async function importDataprofilsText(text, onProgress = () => {}) {
   const enriched = [];
   for (let index = 0; index < validProfiles.length; index++) {
     const profile = validProfiles[index];
-    const fingerprint = buildShapeFingerprint(profile);
-    const dna = buildShapeDNA(profile);
+    const fingerprint = buildShapeFingerprint(profile, settings);
+    const dna = buildShapeDNA(profile, settings);
     enriched.push({ ...profile, fingerprint, dna });
 
     if (index % 10 === 0 || index === validProfiles.length - 1) {
@@ -49,6 +51,7 @@ export async function importDataprofilsText(text, onProgress = () => {}) {
     name: 'Base profils locale',
     source: 'dataprofils.js',
     importedAt: new Date().toISOString(),
+    pipelineSettings: settings,
     stats: {
       totalProfiles: profiles.length,
       validProfiles: enriched.length,
@@ -147,54 +150,27 @@ function stripComments(text) {
 }
 
 function extractArrayText(text) {
-  const marker = text.indexOf('window.Profils');
-  const start = text.indexOf('[', marker >= 0 ? marker : 0);
-  if (start < 0) throw new Error('Tableau Profils introuvable.');
-
-  let depth = 0;
-  let inString = false;
-  let quote = '';
-  let escaped = false;
-
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
-
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === quote) inString = false;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      inString = true;
-      quote = char;
-      continue;
-    }
-
-    if (char === '[') depth++;
-    if (char === ']') depth--;
-    if (depth === 0) return text.slice(start, i + 1);
-  }
-
-  throw new Error('Fin du tableau Profils introuvable.');
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start < 0 || end <= start) throw new Error('Tableau window.Profils introuvable.');
+  return text.slice(start, end + 1);
 }
 
 function normalizeProfile(profile) {
-  if (!profile || !profile.reference || !profile.paths) return null;
-
   const width = Number(profile.largeur);
   const height = Number(profile.hauteur);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  const svgPath = String(profile.paths || '').trim();
+
+  if (!profile.reference || !svgPath || !Number.isFinite(width) || !Number.isFinite(height) || height <= 0) return null;
 
   return {
-    reference: String(profile.reference).trim(),
-    designation: String(profile.designation || '').trim(),
+    reference: String(profile.reference),
+    designation: String(profile.designation || ''),
     width,
     height,
     ratio: width / height,
     surface: Number(profile.surface) || 0,
     perimeter: Number(profile.perimetreExt) || 0,
-    svgPath: String(profile.paths)
+    svgPath
   };
 }
