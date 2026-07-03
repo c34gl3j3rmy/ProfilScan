@@ -20,8 +20,10 @@ export function renderResults(result) {
   drawDetectedItems(ctx, result.items || []);
 
   const items = result.items || [];
-  const closedCount = (result.debug?.contours || []).filter(contour => contour.closed).length;
-  document.querySelector('#detectedCount').textContent = `Profils detectes : ${items.length} · formes fermees : ${closedCount}`;
+  const contours = result.debug?.contours || [];
+  const closedCount = contours.filter(contour => contour.closed).length;
+  const holeCount = contours.reduce((sum, contour) => sum + (contour.holes?.length || 0), 0);
+  document.querySelector('#detectedCount').textContent = `Profils detectes : ${items.length} · formes fermees : ${closedCount} · trous : ${holeCount}`;
   const list = document.querySelector('#resultList');
   list.innerHTML = '';
   for (const item of items) {
@@ -52,6 +54,19 @@ function drawTrackedContours(ctx, contours) {
     ctx.strokeStyle = contour.closed ? '#22c55e' : '#f97316';
     ctx.fillStyle = ctx.strokeStyle;
     drawPolyline(ctx, contour.points || [], Boolean(contour.closed));
+    drawHoleContours(ctx, contour.holes || []);
+  }
+  ctx.restore();
+}
+
+function drawHoleContours(ctx, holes) {
+  if (!holes.length) return;
+  ctx.save();
+  ctx.lineWidth = Math.max(1, ctx.canvas.width / 650);
+  ctx.strokeStyle = '#38bdf8';
+  ctx.fillStyle = '#38bdf8';
+  for (const hole of holes) {
+    drawPolyline(ctx, hole.points || [], Boolean(hole.closed));
   }
   ctx.restore();
 }
