@@ -31,6 +31,9 @@ const copySignatureButton = document.querySelector('#copySignatureButton');
 const copyAnalysisReportButton = document.querySelector('#copyAnalysisReportButton');
 const closeSignatureButton = document.querySelector('#closeSignatureButton');
 const signatureOutput = document.querySelector('#signatureOutput');
+const visionPanel = document.querySelector('#resultVisionPanel');
+const compactVisionButton = document.querySelector('#compactVisionButton');
+const cropImageButton = document.querySelector('#cropImageButton');
 const video = document.querySelector('#cameraPreview');
 const analysisStatus = document.querySelector('#analysisStatus');
 const analysisProgress = document.querySelector('#analysisProgress');
@@ -336,6 +339,18 @@ async function refreshApplication() {
   window.location.reload();
 }
 
+function toggleCompactVision() {
+  visionPanel?.classList.toggle('compact');
+  const active = visionPanel?.classList.contains('compact');
+  compactVisionButton.textContent = active ? 'Image normale' : 'Image compacte';
+}
+
+function showCropComingSoon() {
+  if (!cropImageButton) return;
+  cropImageButton.textContent = 'Recadrage bientôt';
+  setTimeout(() => { cropImageButton.textContent = 'Recadrer'; }, 1400);
+}
+
 function roundArray(values) {
   if (!Array.isArray(values)) return [];
   return values.map(value => typeof value === 'number' ? Number(value.toFixed(6)) : value);
@@ -357,6 +372,8 @@ signatureDebugButton?.addEventListener('click', openSignatureScreen);
 showSignatureButton?.addEventListener('click', showSignature);
 copySignatureButton?.addEventListener('click', copySignatureOutput);
 copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
+compactVisionButton?.addEventListener('click', toggleCompactVision);
+cropImageButton?.addEventListener('click', showCropComingSoon);
 closeSignatureButton?.addEventListener('click', () => show('home'));
 signatureSearchInput?.addEventListener('keydown', event => { if (event.key === 'Enter') showSignature(); });
 
