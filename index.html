@@ -75,11 +75,12 @@
         </div>
       </div>
       <ol id="resultList"></ol>
+      <section id="analysisAdvice" class="advice-panel"></section>
       <button id="copyAnalysisReportButton" class="button ghost">Copier le rapport d'analyse</button>
 
       <details id="debugSettings" class="debug-panel" open>
         <summary>Reglages</summary>
-        <p class="hint">Rouge = contours detectes. Vert = formes continues retenues. Bleu = trous detectes. Les reglages relancent l'analyse en direct.</p>
+        <p class="hint">Rouge = focus peaking des contours. Orange = contours ouverts. Cyan = trous detectes.</p>
 
         <h3>Profil attendu</h3>
         <input id="expectedProfileInput" class="text-input" list="profileReferenceList" placeholder="Ex. PR10">
@@ -88,23 +89,29 @@
         <button id="autoSettingsButton" class="button secondary">Reglage auto</button>
         <label class="range-row">Luminosite <output id="brightnessValue">0</output>
           <input id="brightnessInput" type="range" min="-80" max="80" value="0">
+          <small>Gauche = assombrit · droite = eclaircit.</small>
         </label>
         <label class="range-row">Contraste <output id="contrastValue">100</output>%
           <input id="contrastInput" type="range" min="50" max="180" value="100">
+          <small>Droite = renforce les differences entre profil et fond.</small>
         </label>
 
         <h3>Detection image</h3>
         <label class="range-row">Seuil contour <output id="edgeQuantileValue">82</output>%
           <input id="edgeQuantileInput" type="range" min="60" max="95" value="82">
+          <small>Gauche = plus de contours · droite = moins de bruit.</small>
         </label>
         <label class="range-row">Connexion contours <output id="linkRadiusValue">5</output> px
           <input id="linkRadiusInput" type="range" min="1" max="12" value="5">
+          <small>Droite = relie davantage les segments interrompus.</small>
         </label>
         <label class="range-row">Aire mini <output id="minAreaValue">0.07</output>%
           <input id="minAreaInput" type="range" min="1" max="40" value="7">
+          <small>Droite = supprime plus de petits parasites.</small>
         </label>
         <label class="range-row">Fusion objets <output id="mergeGapValue">4.5</output>%
           <input id="mergeGapInput" type="range" min="1" max="15" value="45">
+          <small>Droite = fusionne les morceaux proches du meme profil.</small>
         </label>
 
         <h3>Poids matching</h3>
