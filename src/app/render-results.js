@@ -31,10 +31,60 @@ export function renderResults(result) {
     li.innerHTML = renderItem(item);
     list.appendChild(li);
   }
+  renderAdvice(result, items, contours, closedCount);
 }
 
 function renderItem(item) {
   return `<strong>${item.reference}</strong><br>${item.designation}<br>${Math.round(item.score)} %${formatScoreDetails(item.scoreDetails)}${formatTopCandidates(item.topCandidates)}`;
+}
+
+function renderAdvice(result, items, contours, closedCount) {
+  const panel = document.querySelector('#analysisAdvice');
+  if (!panel) return;
+
+  const edges = result.debug?.edges || [];
+  const edgeDensity = edges.length / Math.max(1, result.width * result.height);
+  const openCount = Math.max(0, contours.length - closedCount);
+  const suggestions = [];
+
+  if (!items.length && !closedCount) {
+    suggestions.push(['Aucun profil detecte', 'Baisse legerement le seuil contour, augmente le contraste, puis augmente Connexion contours si les traits restent coupes.', 'danger']);
+  }
+  if (edgeDensity > 0.045) {
+    suggestions.push(['Trop de bruit', 'Augmente Seuil contour ou Aire mini pour supprimer les petits points rouges parasites.', 'warning']);
+  }
+  if (edgeDensity < 0.006) {
+    suggestions.push(['Pas assez de contours', 'Diminue Seuil contour ou augmente le contraste pour faire ressortir le profil.', 'warning']);
+  }
+  if (openCount > closedCount) {
+    suggestions.push(['Contours non fermes', 'Augmente Connexion contours ou Fusion objets pour relier les segments du meme profil.', 'info']);
+  }
+  if (items.length > 3) {
+    suggestions.push(['Trop d objets detectes', 'Augmente Aire mini ou Fusion objets pour eviter les morceaux parasites.', 'warning']);
+  }
+  if (!suggestions.length) {
+    suggestions.push(['Segmentation exploitable', 'Tu peux maintenant ajuster les poids de matching ou indiquer le profil attendu pour comparer les scores.', 'ok']);
+  }
+
+  const settings = result.settings;
+  panel.innerHTML = `
+    <h3>Informations & conseils</h3>
+    <div class="advice-status ${items.length ? 'ok' : 'danger'}">
+      <strong>${items.length ? 'Analyse exploitable' : 'Detection insuffisante'}</strong>
+      <span>${items.length} profil(s) detecte(s), ${closedCount} forme(s) fermee(s), ${openCount} contour(s) ouvert(s)</span>
+    </div>
+    ${suggestions.map(([title, text, type]) => `<div class="advice-card ${type}"><strong>${title}</strong><span>${text}</span></div>`).join('')}
+    <details class="score-details"><summary>Valeurs de reglages actuelles</summary>
+      <table><tbody>
+        <tr><td>Luminosite</td><td>${settings?.image?.brightness ?? '-'}</td></tr>
+        <tr><td>Contraste</td><td>${settings?.image?.contrast ?? '-'}%</td></tr>
+        <tr><td>Seuil contour</td><td>${Math.round((settings?.detection?.edgeQuantile ?? 0) * 100)}%</td></tr>
+        <tr><td>Connexion contours</td><td>${settings?.detection?.linkRadius ?? '-'} px</td></tr>
+        <tr><td>Aire mini</td><td>${formatPercent(settings?.detection?.minAreaRatio)}</td></tr>
+        <tr><td>Fusion objets</td><td>${formatPercent(settings?.detection?.mergeGapRatio)}</td></tr>
+        <tr><td>Densite points rouges</td><td>${formatPercent(edgeDensity)}</td></tr>
+      </tbody></table>
+    </details>`;
 }
 
 function drawFocusPeakingOverlay(ctx, edges) {
@@ -146,10 +196,15 @@ function formatTopCandidates(candidates) {
 function formatScoreDetails(details) {
   const scores = details?.subscores;
   if (!scores) return '';
-  return `<div class="score-details">${scoreBar('Ratio', scores.ratio)}${scoreBar('Radial', scores.radial)}${scoreBar('Hu', scores.hu)}${scoreBar('Fourier', scores.fourier)}${scoreBar('Angles', scores.angle)}${scoreBar('Remplissage', scores.fill)}</div>`;
+  return `<div class="score-details">${scoreBar('Ratio', scores.ratio)}${scoreBar('Radial', scores.radial)}${scoreBar('Hu', scores.hu)}${scoreBar('Fourier', scores.fourier)}${scoreBar('Angles', scores.angle)}${scoreBar('Remplissage', scores.fill)}${scoreBar('Avance', scores.advanced)}</div>`;
 }
 
 function scoreBar(label, value) {
   const safe = Math.max(0, Math.min(100, Number(value) || 0));
   return `<div class="score-bar"><span>${label}</span><meter min="0" max="100" value="${safe}"></meter><strong>${safe}%</strong></div>`;
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) return '-';
+  return `${(value * 100).toFixed(2)}%`;
 }
