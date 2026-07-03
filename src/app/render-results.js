@@ -15,7 +15,7 @@ export function renderResults(result) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
-  drawEdgeOverlay(ctx, result.debug?.edges || []);
+  drawFocusPeakingOverlay(ctx, result.debug?.edges || []);
   drawTrackedContours(ctx, result.debug?.contours || []);
   drawDetectedItems(ctx, result.items || []);
 
@@ -37,21 +37,34 @@ function renderItem(item) {
   return `<strong>${item.reference}</strong><br>${item.designation}<br>${Math.round(item.score)} %${formatScoreDetails(item.scoreDetails)}${formatTopCandidates(item.topCandidates)}`;
 }
 
-function drawEdgeOverlay(ctx, edges) {
+function drawFocusPeakingOverlay(ctx, edges) {
   if (!edges.length) return;
   ctx.save();
-  ctx.globalAlpha = 0.75;
-  ctx.fillStyle = '#ef4444';
-  const size = Math.max(1, Math.round(ctx.canvas.width / 900));
-  for (const point of edges) ctx.fillRect(point.x, point.y, size, size);
+  const size = Math.max(2, Math.round(ctx.canvas.width / 520));
+  const haloSize = Math.max(size + 2, Math.round(ctx.canvas.width / 320));
+
+  ctx.globalAlpha = 0.38;
+  ctx.fillStyle = '#ffffff';
+  for (const point of edges) ctx.fillRect(point.x - haloSize / 2, point.y - haloSize / 2, haloSize, haloSize);
+
+  ctx.globalAlpha = 1;
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = Math.max(2, size);
+  ctx.fillStyle = '#ff1111';
+  for (const point of edges) ctx.fillRect(point.x - size / 2, point.y - size / 2, size, size);
   ctx.restore();
 }
 
 function drawTrackedContours(ctx, contours) {
   ctx.save();
-  ctx.lineWidth = Math.max(2, ctx.canvas.width / 420);
+  ctx.lineWidth = Math.max(3, ctx.canvas.width / 300);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = Math.max(2, ctx.canvas.width / 420);
+
   for (const contour of contours) {
-    ctx.strokeStyle = contour.closed ? '#22c55e' : '#f97316';
+    ctx.strokeStyle = contour.closed ? '#ff1111' : '#ff7a00';
     ctx.fillStyle = ctx.strokeStyle;
     drawPolyline(ctx, contour.points || [], Boolean(contour.closed));
     drawHoleContours(ctx, contour.holes || []);
@@ -62,9 +75,11 @@ function drawTrackedContours(ctx, contours) {
 function drawHoleContours(ctx, holes) {
   if (!holes.length) return;
   ctx.save();
-  ctx.lineWidth = Math.max(1, ctx.canvas.width / 650);
-  ctx.strokeStyle = '#38bdf8';
-  ctx.fillStyle = '#38bdf8';
+  ctx.lineWidth = Math.max(2, ctx.canvas.width / 480);
+  ctx.strokeStyle = '#00d5ff';
+  ctx.fillStyle = '#00d5ff';
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = Math.max(2, ctx.canvas.width / 500);
   for (const hole of holes) {
     drawPolyline(ctx, hole.points || [], Boolean(hole.closed));
   }
