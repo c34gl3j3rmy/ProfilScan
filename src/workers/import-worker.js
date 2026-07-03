@@ -4,9 +4,13 @@ self.onmessage = async event => {
   if (event.data?.type !== 'import-dataprofils') return;
 
   try {
-    const collection = await importDataprofilsText(event.data.text, progress => {
-      self.postMessage({ type: 'progress', ...progress });
-    });
+    const collection = await importDataprofilsText(
+      event.data.text,
+      progress => {
+        self.postMessage({ type: 'progress', ...progress });
+      },
+      event.data.pipelineSettings || {}
+    );
 
     self.postMessage({ type: 'done', collection });
   } catch (error) {
