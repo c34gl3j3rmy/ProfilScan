@@ -73,11 +73,35 @@ function drawDetectedItems(ctx, items) {
 
 function drawPolyline(ctx, points, closed) {
   if (points.length < 2) return;
+  const jumpLimit = estimateJumpLimit(points);
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-  if (closed) ctx.closePath();
+
+  for (let i = 1; i < points.length; i++) {
+    const previous = points[i - 1];
+    const point = points[i];
+    if (distance(previous, point) > jumpLimit) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  }
+
+  if (closed && distance(points[0], points[points.length - 1]) <= jumpLimit) ctx.closePath();
   ctx.stroke();
+}
+
+function estimateJumpLimit(points) {
+  if (points.length < 3) return 16;
+  const distances = [];
+  for (let i = 1; i < points.length; i++) {
+    const value = distance(points[i - 1], points[i]);
+    if (value > 0) distances.push(value);
+  }
+  distances.sort((a, b) => a - b);
+  const median = distances[Math.floor(distances.length / 2)] || 4;
+  return Math.max(12, median * 8);
+}
+
+function distance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function formatTopCandidates(candidates) {
