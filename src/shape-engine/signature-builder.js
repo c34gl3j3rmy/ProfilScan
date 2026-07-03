@@ -78,6 +78,7 @@ export function buildDetectedFingerprintFromPoints(object) {
 
 function buildFingerprint({ reference, width, height, ratio, surface, perimeter, fillRatio = 0, points, source }) {
   const normalizedPoints = normalizePoints(points || []);
+  const compactPoints = simplifyPoints(normalizedPoints, 0.01).slice(0, 240);
   const radial = buildRadialSignature(normalizedPoints, RADIAL_BINS);
   const angleHistogram = buildAngleHistogram(normalizedPoints, ANGLE_BINS);
   const hu = buildHuMoments(normalizedPoints);
@@ -94,10 +95,13 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   ];
 
   return {
-    version: '1.4',
+    version: '1.5',
     reference,
     values,
-    descriptors: { radial, angleHistogram, hu, fourier },
+    contour: {
+      normalizedPoints: compactPoints
+    },
+    descriptors: { radial, angleHistogram, hu, fourier, points: compactPoints },
     summary: {
       width,
       height,
@@ -281,46 +285,15 @@ function buildHuMoments(points) {
   const h5 = (n30 - 3 * n12) * (n30 + n12) * ((n30 + n12) ** 2 - 3 * (n21 + n03) ** 2) + (3 * n21 - n03) * (n21 + n03) * (3 * (n30 + n12) ** 2 - (n21 + n03) ** 2);
   const h6 = (n20 - n02) * ((n30 + n12) ** 2 - (n21 + n03) ** 2) + 4 * n11 * (n30 + n12) * (n21 + n03);
   const h7 = (3 * n21 - n03) * (n30 + n12) * ((n30 + n12) ** 2 - 3 * (n21 + n03) ** 2) - (n30 - 3 * n12) * (n21 + n03) * (3 * (n30 + n12) ** 2 - (n21 + n03) ** 2);
-  return [h1, h2, h3, h4, h5, h6, h7].map(logHu);
-}
-
-function buildFourierDescriptor(points, termCount) {
-  const sampled = resamplePoints(points, 128);
-  if (!sampled.length) return Array.from({ length: termCount }, () => 0);
-  const descriptors = [];
-  for (let k = 1; k <= termCount; k++) {
-    let real = 0;
-    let imag = 0;
-    for (let n = 0; n < sampled.length; n++) {
-      const angle = (-2 * Math.PI * k * n) / sampled.length;
-      const value = sampled[n].x + sampled[n].y;
-      real += value * Math.cos(angle);
-      imag += value * Math.sin(angle);
-    }
-    descriptors.push(Math.hypot(real, imag) / sampled.length);
-  }
-  const base = descriptors[0] || 1;
-  return descriptors.map(value => value / base);
-}
-
-function resamplePoints(points, count) {
-  if (!points.length) return [];
-  if (points.length === count) return points;
-  const result = [];
-  for (let i = 0; i < count; i++) {
-    const index = Math.round((i / count) * (points.length - 1));
-    result.push(points[index]);
-  }
-  return result;
+  return [h1, h2, h3, h4, h5, h6, h7].map(value => Math.sign(value) * Math.log10(Math.abs(value) + 1e-30));
 }
 
 function momentSet(points) {
-  return points.reduce((moments, point) => {
-    moments.m00 += 1;
-    moments.m10 += point.x;
-    moments.m01 += point.y;
-    return moments;
-  }, { m00: 0, m10: 0, m01: 0 });
+  return points.reduce((sum, point) => ({
+    m00: sum.m00 + 1,
+    m10: sum.m10 + point.x,
+    m01: sum.m01 + point.y
+  }), { m00: 0, m10: 0, m01: 0 });
 }
 
 function centralMoment(points, cx, cy, p, q) {
@@ -328,47 +301,55 @@ function centralMoment(points, cx, cy, p, q) {
 }
 
 function eta(mu, m00, p, q) {
-  return mu / Math.max(Number.EPSILON, m00 ** (1 + (p + q) / 2));
+  return mu / (m00 ** (1 + (p + q) / 2));
 }
 
-function logHu(value) {
-  if (!Number.isFinite(value) || value === 0) return 0;
-  return -Math.sign(value) * Math.log10(Math.abs(value));
-}
-
-function simplifyPoints(points, tolerance) {
-  if (points.length <= 2) return points;
-  const output = [points[0]];
-  let last = points[0];
-  for (let i = 1; i < points.length - 1; i++) {
-    if (Math.hypot(points[i].x - last.x, points[i].y - last.y) >= tolerance) {
-      output.push(points[i]);
-      last = points[i];
+function buildFourierDescriptor(points, terms) {
+  if (!points.length) return Array.from({ length: terms }, () => 0);
+  const values = [];
+  for (let k = 1; k <= terms; k++) {
+    let real = 0;
+    let imaginary = 0;
+    for (let n = 0; n < points.length; n++) {
+      const angle = (-2 * Math.PI * k * n) / points.length;
+      real += points[n].x * Math.cos(angle) - points[n].y * Math.sin(angle);
+      imaginary += points[n].x * Math.sin(angle) + points[n].y * Math.cos(angle);
     }
+    values.push(Math.hypot(real, imaginary) / points.length);
   }
-  output.push(points[points.length - 1]);
-  return output;
+  const base = values[0] || 1;
+  return values.map(value => value / base);
 }
 
 function rectanglePoints(width, height) {
-  const points = [];
-  pushLine(points, { x: 0, y: 0 }, { x: width, y: 0 }, 16);
-  pushLine(points, { x: width, y: 0 }, { x: width, y: height }, 16);
-  pushLine(points, { x: width, y: height }, { x: 0, y: height }, 16);
-  pushLine(points, { x: 0, y: height }, { x: 0, y: 0 }, 16);
-  return points;
+  return [
+    { x: 0, y: 0 },
+    { x: width, y: 0 },
+    { x: width, y: height },
+    { x: 0, y: height }
+  ];
+}
+
+function simplifyPoints(points, epsilon) {
+  if (points.length <= 3) return points;
+  const output = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const previous = output[output.length - 1];
+    const point = points[i];
+    if (Math.hypot(point.x - previous.x, point.y - previous.y) >= epsilon) output.push(point);
+  }
+  return output;
 }
 
 function countSubPaths(pathText) {
-  return (String(pathText).match(/[Mm]/g) || []).length || 1;
+  return (String(pathText).match(/[Mm]/g) || []).length;
+}
+
+function normalize(value, scale) {
+  return Number.isFinite(value) ? value / scale : 0;
 }
 
 function normalizeRatio(ratio) {
-  if (!Number.isFinite(ratio) || ratio <= 0) return 1;
-  return ratio >= 1 ? ratio : 1 / ratio;
-}
-
-function normalize(value, max) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value / max));
+  if (!Number.isFinite(ratio) || ratio <= 0) return 0;
+  return Math.log(ratio);
 }
