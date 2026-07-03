@@ -24,9 +24,11 @@ const newAnalysisButton = document.querySelector('#newAnalysisButton');
 const refreshAppButton = document.querySelector('#refreshAppButton');
 const signatureDebugButton = document.querySelector('#signatureDebugButton');
 const signatureSearchInput = document.querySelector('#signatureSearchInput');
+const expectedProfileInput = document.querySelector('#expectedProfileInput');
 const profileReferenceList = document.querySelector('#profileReferenceList');
 const showSignatureButton = document.querySelector('#showSignatureButton');
 const copySignatureButton = document.querySelector('#copySignatureButton');
+const copyAnalysisReportButton = document.querySelector('#copyAnalysisReportButton');
 const closeSignatureButton = document.querySelector('#closeSignatureButton');
 const signatureOutput = document.querySelector('#signatureOutput');
 const video = document.querySelector('#cameraPreview');
@@ -54,6 +56,7 @@ let collection = null;
 let analysisWorker = null;
 let importWorker = null;
 let sourceImage = null;
+let lastResult = null;
 let liveTimer = null;
 let liveRun = 0;
 
@@ -173,6 +176,7 @@ async function analyzeImage(imageBitmap) {
   resetProgress('Analyse de l image');
   setProgress(10, 'Preparation de l image', 'Image chargee');
   const result = await analyzeWithSettings(true);
+  lastResult = result;
   setProgress(100, 'Resultat pret', 'Affichage des detections', 'done');
   renderResults(result);
   show('result');
@@ -186,7 +190,10 @@ function scheduleLiveAnalysis() {
     try {
       document.querySelector('#detectedCount').textContent = 'Recalcul en direct...';
       const result = await analyzeWithSettings(false);
-      if (run === liveRun) renderResults(result);
+      if (run === liveRun) {
+        lastResult = result;
+        renderResults(result);
+      }
     } catch (error) {
       document.querySelector('#detectedCount').textContent = 'Erreur recalcul : ' + formatError(error);
     }
@@ -209,7 +216,7 @@ function openSignatureScreen() {
 
 function showSignature() {
   const reference = signatureSearchInput.value.trim().toLowerCase();
-  const profile = collection?.profiles?.find(item => item.reference.toLowerCase() === reference);
+  const profile = findProfile(reference);
   if (!profile) {
     signatureOutput.value = `Reference introuvable : ${signatureSearchInput.value}`;
     return;
@@ -251,11 +258,72 @@ async function copySignatureOutput() {
   setTimeout(() => { copySignatureButton.textContent = 'Copier la signature'; }, 1200);
 }
 
+async function copyAnalysisReport() {
+  if (!lastResult) return;
+  const report = buildAnalysisReport();
+  await copyText(JSON.stringify(report, null, 2));
+  copyAnalysisReportButton.textContent = 'Rapport copie';
+  setTimeout(() => { copyAnalysisReportButton.textContent = "Copier le rapport d'analyse"; }, 1200);
+}
+
+function buildAnalysisReport() {
+  const expected = findProfile(expectedProfileInput?.value.trim().toLowerCase());
+  const best = lastResult.items?.[0] || null;
+  const expectedCandidate = expected ? findCandidate(expected.reference) : null;
+
+  return {
+    type: 'ProfilScan analysis report',
+    generatedAt: new Date().toISOString(),
+    base: {
+      name: collection?.name,
+      profiles: collection?.profiles?.length,
+      importedAt: collection?.importedAt
+    },
+    image: {
+      width: lastResult.width,
+      height: lastResult.height,
+      detectedItems: lastResult.items?.length || 0,
+      contours: lastResult.debug?.contours?.length || 0,
+      holes: (lastResult.debug?.contours || []).reduce((sum, contour) => sum + (contour.holes?.length || 0), 0)
+    },
+    settings: lastResult.settings,
+    expectedProfile: expected ? buildSignatureExport(expected) : null,
+    bestMatch: best,
+    expectedCandidate,
+    topCandidates: (best?.topCandidates || []).slice(0, 10).map(candidate => ({
+      reference: candidate.reference,
+      designation: candidate.designation,
+      score: candidate.score,
+      scoreDetails: candidate.scoreDetails
+    })),
+    detectedSignature: {
+      scoreDetails: best?.scoreDetails || null,
+      boundingBox: best?.boundingBox || null,
+      debugContours: (lastResult.debug?.contours || []).slice(0, 3)
+    }
+  };
+}
+
+function findCandidate(reference) {
+  const target = String(reference || '').toLowerCase();
+  for (const item of lastResult.items || []) {
+    const candidate = item.topCandidates?.find(entry => entry.reference.toLowerCase() === target);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function findProfile(reference) {
+  if (!reference) return null;
+  return collection?.profiles?.find(item => item.reference.toLowerCase() === reference) || null;
+}
+
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
     return;
   }
+  signatureOutput.value = text;
   signatureOutput.select();
   document.execCommand('copy');
 }
@@ -288,6 +356,7 @@ refreshAppButton?.addEventListener('click', refreshApplication);
 signatureDebugButton?.addEventListener('click', openSignatureScreen);
 showSignatureButton?.addEventListener('click', showSignature);
 copySignatureButton?.addEventListener('click', copySignatureOutput);
+copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
 closeSignatureButton?.addEventListener('click', () => show('home'));
 signatureSearchInput?.addEventListener('keydown', event => { if (event.key === 'Enter') showSignature(); });
 
