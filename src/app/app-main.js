@@ -35,6 +35,7 @@ const signatureOutput = document.querySelector('#signatureOutput');
 const visionPanel = document.querySelector('#resultVisionPanel');
 const compactVisionButton = document.querySelector('#compactVisionButton');
 const cropImageButton = document.querySelector('#cropImageButton');
+const autoSettingsButton = document.querySelector('#autoSettingsButton');
 const resultCanvas = document.querySelector('#resultCanvas');
 const video = document.querySelector('#cameraPreview');
 const analysisStatus = document.querySelector('#analysisStatus');
@@ -180,20 +181,44 @@ function analyzeWithSettings(progress) {
   return runWorker(getAnalysisWorker(), { type: 'analyze', imageBitmap: sourceImage, collection, settings }, progress);
 }
 
+async function applyAutoSettings(imageBitmap = sourceImage) {
+  if (!imageBitmap) return null;
+  lastAutoSettings = await computeAutoImageSettings(imageBitmap);
+  applyAutoImageSettings(inputs, lastAutoSettings);
+  return lastAutoSettings;
+}
+
 async function analyzeImage(imageBitmap) {
   sourceImage = imageBitmap;
   exitCropMode();
   show('analysis');
   resetProgress('Analyse de l image');
   setProgress(6, 'Auto-reglage', 'Calcul des seuils image');
-  lastAutoSettings = await computeAutoImageSettings(imageBitmap);
-  applyAutoImageSettings(inputs, lastAutoSettings);
-  setProgress(10, 'Preparation de l image', `Seuil contour auto : ${lastAutoSettings.edgeQuantile} %`);
+  const autoSettings = await applyAutoSettings(imageBitmap);
+  setProgress(10, 'Preparation de l image', `Seuil contour auto : ${autoSettings.edgeQuantile} %`);
   const result = await analyzeWithSettings(true);
   lastResult = result;
   setProgress(100, 'Resultat pret', 'Affichage des detections', 'done');
   renderResults(result);
   show('result');
+}
+
+async function rerunAutoSettings() {
+  if (!sourceImage || !autoSettingsButton) return;
+  try {
+    autoSettingsButton.textContent = 'Calcul auto...';
+    const autoSettings = await applyAutoSettings();
+    document.querySelector('#detectedCount').textContent = `Reglage auto : seuil ${autoSettings.edgeQuantile} %`;
+    const result = await analyzeWithSettings(false);
+    lastResult = result;
+    renderResults(result);
+    autoSettingsButton.textContent = 'Reglage auto applique';
+    setTimeout(() => { autoSettingsButton.textContent = 'Reglage auto'; }, 1200);
+  } catch (error) {
+    autoSettingsButton.textContent = 'Erreur reglage auto';
+    document.querySelector('#detectedCount').textContent = 'Erreur reglage auto : ' + formatError(error);
+    setTimeout(() => { autoSettingsButton.textContent = 'Reglage auto'; }, 1600);
+  }
 }
 
 function scheduleLiveAnalysis() {
@@ -492,6 +517,7 @@ signatureDebugButton?.addEventListener('click', openSignatureScreen);
 showSignatureButton?.addEventListener('click', showSignature);
 copySignatureButton?.addEventListener('click', copySignatureOutput);
 copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
+autoSettingsButton?.addEventListener('click', rerunAutoSettings);
 compactVisionButton?.addEventListener('click', toggleCompactVision);
 cropImageButton?.addEventListener('click', toggleCropMode);
 resultCanvas?.addEventListener('pointerdown', startCrop);
