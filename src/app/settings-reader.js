@@ -14,6 +14,7 @@ export function bindRange(inputId, outputId, formatter) {
 
 export function buildSettings(inputs) {
   return {
+    expectedReference: document.querySelector('#expectedProfileInput')?.value.trim() || '',
     image: {
       brightness: numberValue(inputs.brightness, 0),
       contrast: numberValue(inputs.contrast, 100)
