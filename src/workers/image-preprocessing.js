@@ -23,23 +23,62 @@ export function buildGray(imageData, imageSettings) {
   return gray;
 }
 
-export function blurGray(gray, width, height) {
-  const out = new Uint8Array(gray.length);
+export function suppressTexture(gray, width, height, strength = 0) {
+  const radius = Math.round(strength);
+  if (radius <= 0) return gray;
 
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const i = y * width + x;
-      out[i] = Math.round((
-        gray[i] * 4 +
-        gray[i - 1] * 2 +
-        gray[i + 1] * 2 +
-        gray[i - width] * 2 +
-        gray[i + width] * 2 +
-        gray[i - width - 1] +
-        gray[i - width + 1] +
-        gray[i + width - 1] +
-        gray[i + width + 1]
-      ) / 16);
+  let current = gray;
+  if (radius >= 2) current = medianGray(current, width, height, 1);
+  return boxBlurGray(current, width, height, Math.min(6, radius));
+}
+
+export function blurGray(gray, width, height) {
+  return boxBlurGray(gray, width, height, 1);
+}
+
+function boxBlurGray(gray, width, height, radius) {
+  const out = new Uint8Array(gray.length);
+  const safeRadius = Math.max(1, Math.round(radius));
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0;
+      let count = 0;
+      for (let dy = -safeRadius; dy <= safeRadius; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= height) continue;
+        for (let dx = -safeRadius; dx <= safeRadius; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= width) continue;
+          sum += gray[yy * width + xx];
+          count++;
+        }
+      }
+      out[y * width + x] = Math.round(sum / Math.max(1, count));
+    }
+  }
+
+  return out;
+}
+
+function medianGray(gray, width, height, radius) {
+  const out = new Uint8Array(gray.length);
+  const values = [];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      values.length = 0;
+      for (let dy = -radius; dy <= radius; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= height) continue;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= width) continue;
+          values.push(gray[yy * width + xx]);
+        }
+      }
+      values.sort((a, b) => a - b);
+      out[y * width + x] = values[Math.floor(values.length / 2)] || gray[y * width + x];
     }
   }
 
