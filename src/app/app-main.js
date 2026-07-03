@@ -9,7 +9,8 @@ const screens = {
   home: document.querySelector('#screenHome'),
   camera: document.querySelector('#screenCamera'),
   analysis: document.querySelector('#screenAnalysis'),
-  result: document.querySelector('#screenResult')
+  result: document.querySelector('#screenResult'),
+  signature: document.querySelector('#screenSignature')
 };
 
 const baseStatus = document.querySelector('#baseStatus');
@@ -20,6 +21,14 @@ const cameraButton = document.querySelector('#cameraButton');
 const captureButton = document.querySelector('#captureButton');
 const cancelCameraButton = document.querySelector('#cancelCameraButton');
 const newAnalysisButton = document.querySelector('#newAnalysisButton');
+const refreshAppButton = document.querySelector('#refreshAppButton');
+const signatureDebugButton = document.querySelector('#signatureDebugButton');
+const signatureSearchInput = document.querySelector('#signatureSearchInput');
+const profileReferenceList = document.querySelector('#profileReferenceList');
+const showSignatureButton = document.querySelector('#showSignatureButton');
+const copySignatureButton = document.querySelector('#copySignatureButton');
+const closeSignatureButton = document.querySelector('#closeSignatureButton');
+const signatureOutput = document.querySelector('#signatureOutput');
 const video = document.querySelector('#cameraPreview');
 const analysisStatus = document.querySelector('#analysisStatus');
 const analysisProgress = document.querySelector('#analysisProgress');
@@ -53,8 +62,10 @@ Object.values(inputs).forEach(input => {
 });
 
 function show(name) {
-  Object.values(screens).forEach(screen => screen.classList.add('hidden'));
-  screens[name].classList.remove('hidden');
+  Object.values(screens).forEach(screen => {
+    if (screen) screen.classList.add('hidden');
+  });
+  screens[name]?.classList.remove('hidden');
 }
 
 function resetProgress(label = 'Preparation') {
@@ -101,6 +112,7 @@ async function boot() {
     return;
   }
   baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
+  populateProfileReferenceList();
   show('home');
 }
 
@@ -141,6 +153,7 @@ async function importBaseFromFile(file) {
     collection = await runWorker(getImportWorker(), { type: 'import-dataprofils', text }, true);
     setProgress(92, 'Enregistrement local', 'Stockage IndexedDB');
     await saveCollection(collection);
+    populateProfileReferenceList();
     setProgress(100, 'Import termine', `${collection.profiles.length} profils valides`, 'done');
     baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
     setTimeout(() => show('home'), 500);
@@ -180,6 +193,90 @@ function scheduleLiveAnalysis() {
   }, 180);
 }
 
+function populateProfileReferenceList() {
+  if (!profileReferenceList || !collection?.profiles?.length) return;
+  profileReferenceList.innerHTML = collection.profiles
+    .map(profile => `<option value="${escapeHtml(profile.reference)}">${escapeHtml(profile.designation || '')}</option>`)
+    .join('');
+}
+
+function openSignatureScreen() {
+  populateProfileReferenceList();
+  signatureOutput.value = '';
+  show('signature');
+  signatureSearchInput?.focus();
+}
+
+function showSignature() {
+  const reference = signatureSearchInput.value.trim().toLowerCase();
+  const profile = collection?.profiles?.find(item => item.reference.toLowerCase() === reference);
+  if (!profile) {
+    signatureOutput.value = `Reference introuvable : ${signatureSearchInput.value}`;
+    return;
+  }
+
+  signatureOutput.value = JSON.stringify(buildSignatureExport(profile), null, 2);
+}
+
+function buildSignatureExport(profile) {
+  return {
+    reference: profile.reference,
+    designation: profile.designation,
+    dimensions: {
+      width: profile.width,
+      height: profile.height,
+      ratio: profile.ratio,
+      normalizedRatio: profile.fingerprint?.summary?.normalizedRatio
+    },
+    summary: profile.fingerprint?.summary,
+    subsignatures: {
+      radial: roundArray(profile.fingerprint?.descriptors?.radial),
+      angleHistogram: roundArray(profile.fingerprint?.descriptors?.angleHistogram),
+      hu: roundArray(profile.fingerprint?.descriptors?.hu),
+      fourier: roundArray(profile.fingerprint?.descriptors?.fourier),
+      points: (profile.fingerprint?.descriptors?.points || []).slice(0, 80)
+    },
+    dna: {
+      topology: profile.dna?.topology,
+      quality: profile.dna?.quality
+    }
+  };
+}
+
+async function copySignatureOutput() {
+  const text = signatureOutput.value.trim();
+  if (!text) return;
+  await copyText(text);
+  copySignatureButton.textContent = 'Signature copiee';
+  setTimeout(() => { copySignatureButton.textContent = 'Copier la signature'; }, 1200);
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  signatureOutput.select();
+  document.execCommand('copy');
+}
+
+async function refreshApplication() {
+  if ('serviceWorker' in navigator) {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map(registration => registration.update()));
+  }
+  window.location.reload();
+}
+
+function roundArray(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(value => typeof value === 'number' ? Number(value.toFixed(6)) : value);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+}
+
 profileDbInput.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
 replaceProfileDbInput.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
 imageInput.addEventListener('change', async event => analyzeImage(await loadImageFile(event.target.files[0])));
@@ -187,5 +284,11 @@ cameraButton.addEventListener('click', async () => { show('camera'); await start
 captureButton.addEventListener('click', async () => { const imageBitmap = await captureFrame(video); stopCamera(video); await analyzeImage(imageBitmap); });
 cancelCameraButton.addEventListener('click', () => { stopCamera(video); show('home'); });
 newAnalysisButton.addEventListener('click', () => show('home'));
+refreshAppButton?.addEventListener('click', refreshApplication);
+signatureDebugButton?.addEventListener('click', openSignatureScreen);
+showSignatureButton?.addEventListener('click', showSignature);
+copySignatureButton?.addEventListener('click', copySignatureOutput);
+closeSignatureButton?.addEventListener('click', () => show('home'));
+signatureSearchInput?.addEventListener('keydown', event => { if (event.key === 'Enter') showSignature(); });
 
 boot();
