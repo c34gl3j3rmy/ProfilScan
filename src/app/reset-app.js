@@ -36,3 +36,5 @@ async function unregisterServiceWorkers() {
   const registrations = await navigator.serviceWorker.getRegistrations();
   await Promise.all(registrations.map(registration => registration.unregister()));
 }
+
+bindResetAppButton();
