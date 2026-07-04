@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.2.6';
+const CACHE_NAME = 'profilscan-v1.2.7';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,7 @@ const ASSETS = [
   './src/app/image-import.js',
   './src/app/pipeline-preview.js',
   './src/app/render-results.js',
+  './src/app/reset-app.js',
   './src/app/settings-reader.js',
   './src/import/dataprofils-importer.js',
   './src/storage/indexed-db.js',
@@ -28,6 +29,7 @@ const ASSETS = [
   './src/shape-engine/zernike.js',
   './src/workers/import-worker.js',
   './src/workers/analysis-worker.js',
+  './src/workers/section-candidates.js',
   './src/workers/contour-tracer.js',
   './src/workers/image-preprocessing.js',
   './src/workers/morphology.js',
