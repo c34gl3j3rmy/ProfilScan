@@ -1,3 +1,4 @@
+import './reset-app.js';
 import { startCamera, stopCamera, captureFrame } from './camera.js';
 import { loadImageFile } from './image-import.js';
 import { renderPipelinePreview } from './pipeline-preview.js';
@@ -26,7 +27,6 @@ const cameraButton = document.querySelector('#cameraButton');
 const captureButton = document.querySelector('#captureButton');
 const cancelCameraButton = document.querySelector('#cancelCameraButton');
 const newAnalysisButton = document.querySelector('#newAnalysisButton');
-const refreshAppButton = document.querySelector('#refreshAppButton');
 const signatureDebugButton = document.querySelector('#signatureDebugButton');
 const pipelineSettingsButton = document.querySelector('#pipelineSettingsButton');
 const pipelineReferenceInput = document.querySelector('#pipelineReferenceInput');
@@ -91,6 +91,8 @@ let cropDragging = false;
 let currentPipelineSettings = normalizePipelineSettings(DEFAULT_PIPELINE_SETTINGS);
 let pipelinePreviewTimer = null;
 let pipelinePreviewRun = 0;
+let currentScreen = null;
+let restoringHistory = false;
 
 Object.values(inputs).forEach(input => {
   if (input) input.addEventListener('input', scheduleLiveAnalysis);
@@ -100,12 +102,36 @@ Object.values(pipelineInputs).forEach(input => {
   if (input) input.addEventListener('input', schedulePipelinePreview);
 });
 
-function show(name) {
+function show(name, options = {}) {
+  const { replace = false, history = true } = options;
   Object.values(screens).forEach(screen => {
     if (screen) screen.classList.add('hidden');
   });
   screens[name]?.classList.remove('hidden');
+  currentScreen = name;
+
+  if (history && !restoringHistory) updateHistory(name, replace);
 }
+
+function updateHistory(screen, replace) {
+  const state = { profilScanScreen: screen };
+  if (replace || !history.state?.profilScanScreen) history.replaceState(state, '', window.location.pathname);
+  else history.pushState(state, '', window.location.pathname);
+}
+
+function goBackSafe() {
+  if (currentScreen && currentScreen !== 'home' && currentScreen !== 'noBase') history.back();
+  else show('home', { replace: true });
+}
+
+window.addEventListener('popstate', event => {
+  const target = event.state?.profilScanScreen || (collection ? 'home' : 'noBase');
+  restoringHistory = true;
+  if (currentScreen === 'camera' && target !== 'camera') stopCamera(video);
+  exitCropMode();
+  show(target, { history: false });
+  restoringHistory = false;
+});
 
 function resetProgress(label = 'Preparation') {
   analysisProgress.value = 0;
@@ -147,14 +173,14 @@ async function boot() {
   collection = await getCollection();
   if (!collection) {
     baseStatus.textContent = 'Base locale absente';
-    show('noBase');
+    show('noBase', { replace: true });
     return;
   }
   currentPipelineSettings = normalizePipelineSettings(collection.pipelineSettings || DEFAULT_PIPELINE_SETTINGS);
-  applyPipelineSettingsToInputs(currentPipelineSettings);
+  applyPipelineSettingsToInputs(currentPipelineSettings, false);
   baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
   populateProfileReferenceList();
-  show('home');
+  show('home', { replace: true });
 }
 
 function getImportWorker() {
@@ -193,13 +219,13 @@ async function importBaseFromFile(file) {
     const text = await file.text();
     collection = await runWorker(getImportWorker(), { type: 'import-dataprofils', text, pipelineSettings: currentPipelineSettings }, true);
     currentPipelineSettings = normalizePipelineSettings(collection.pipelineSettings || currentPipelineSettings);
-    applyPipelineSettingsToInputs(currentPipelineSettings);
+    applyPipelineSettingsToInputs(currentPipelineSettings, false);
     setProgress(92, 'Enregistrement local', 'Stockage IndexedDB');
     await saveCollection(collection);
     populateProfileReferenceList();
     setProgress(100, 'Import termine', `${collection.profiles.length} profils valides`, 'done');
     baseStatus.textContent = `Base chargee : ${collection.profiles.length} profils`;
-    setTimeout(() => show('home'), 500);
+    setTimeout(() => show('home', { replace: true }), 500);
   } catch (error) {
     showError(error);
   }
@@ -230,7 +256,7 @@ async function analyzeImage(imageBitmap) {
   lastResult = result;
   setProgress(100, 'Resultat pret', 'Affichage des detections', 'done');
   renderResults(result);
-  show('result');
+  show('result', { replace: true });
 }
 
 async function rerunAutoSettings() {
@@ -322,10 +348,10 @@ function buildSignatureExport(profile, fingerprint = profile.fingerprint) {
 
 function openPipelineSettingsScreen() {
   populateProfileReferenceList();
-  applyPipelineSettingsToInputs(currentPipelineSettings);
+  applyPipelineSettingsToInputs(currentPipelineSettings, false);
+  show('pipelineSettings');
   if (!pipelineReferenceInput.value && collection?.profiles?.length) selectRandomPipelineProfile();
   else updatePipelinePreview();
-  show('pipelineSettings');
 }
 
 function buildPipelineSettingsFromInputs() {
@@ -338,17 +364,25 @@ function buildPipelineSettingsFromInputs() {
   return currentPipelineSettings;
 }
 
-function applyPipelineSettingsToInputs(settings) {
+function applyPipelineSettingsToInputs(settings, updatePreview = true) {
   const normalized = normalizePipelineSettings(settings);
   if (pipelineInputs.fillGridSize) pipelineInputs.fillGridSize.value = normalized.fillGridSize;
   if (pipelineInputs.contourPointCount) pipelineInputs.contourPointCount.value = normalized.contourPointCount;
   if (pipelineInputs.simplifyEpsilon) pipelineInputs.simplifyEpsilon.value = Math.round(normalized.simplifyEpsilon * 1000);
   Object.values(pipelineInputs).forEach(input => input?.dispatchEvent(new Event('input')));
+  if (updatePreview && currentScreen === 'pipelineSettings') schedulePipelinePreview();
 }
 
 function schedulePipelinePreview() {
+  if (currentScreen !== 'pipelineSettings') return;
   clearTimeout(pipelinePreviewTimer);
-  pipelinePreviewTimer = setTimeout(updatePipelinePreview, 120);
+  const settings = buildPipelineSettingsFromInputs();
+  const reference = pipelineReferenceInput?.value.trim().toLowerCase();
+  const profile = findProfile(reference) || collection?.profiles?.[0];
+  if (profile) {
+    pipelinePreviewStatus.textContent = `${profile.reference} - recalcul en direct... · grille ${settings.fillGridSize} x ${settings.fillGridSize}`;
+  }
+  pipelinePreviewTimer = setTimeout(updatePipelinePreview, 80);
 }
 
 function selectRandomPipelineProfile() {
@@ -474,14 +508,6 @@ async function copyText(text) {
   signatureOutput.value = text;
   signatureOutput.select();
   document.execCommand('copy');
-}
-
-async function refreshApplication() {
-  if ('serviceWorker' in navigator) {
-    const registrations = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(registrations.map(registration => registration.update()));
-  }
-  window.location.reload();
 }
 
 function toggleCompactVision() {
@@ -617,14 +643,13 @@ replaceProfileDbInput?.addEventListener('change', event => importBaseFromFile(ev
 imageInput?.addEventListener('change', async event => analyzeImage(await loadImageFile(event.target.files[0])));
 cameraButton?.addEventListener('click', async () => { show('camera'); await startCamera(video); });
 captureButton?.addEventListener('click', async () => { const imageBitmap = await captureFrame(video); stopCamera(video); await analyzeImage(imageBitmap); });
-cancelCameraButton?.addEventListener('click', () => { stopCamera(video); show('home'); });
+cancelCameraButton?.addEventListener('click', () => { stopCamera(video); goBackSafe(); });
 newAnalysisButton?.addEventListener('click', () => show('home'));
-refreshAppButton?.addEventListener('click', refreshApplication);
 signatureDebugButton?.addEventListener('click', openSignatureScreen);
 pipelineSettingsButton?.addEventListener('click', openPipelineSettingsScreen);
 pipelineRandomProfileButton?.addEventListener('click', selectRandomPipelineProfile);
 pipelineShowProfileButton?.addEventListener('click', updatePipelinePreview);
-closePipelineSettingsButton?.addEventListener('click', () => show('home'));
+closePipelineSettingsButton?.addEventListener('click', goBackSafe);
 showSignatureButton?.addEventListener('click', showSignature);
 copySignatureButton?.addEventListener('click', copySignatureOutput);
 copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
@@ -635,8 +660,9 @@ resultCanvas?.addEventListener('pointerdown', startCrop);
 resultCanvas?.addEventListener('pointermove', moveCrop);
 resultCanvas?.addEventListener('pointerup', endCrop);
 resultCanvas?.addEventListener('pointercancel', endCrop);
-closeSignatureButton?.addEventListener('click', () => show('home'));
+closeSignatureButton?.addEventListener('click', goBackSafe);
 signatureSearchInput?.addEventListener('keydown', event => { if (event.key === 'Enter') showSignature(); });
 pipelineReferenceInput?.addEventListener('keydown', event => { if (event.key === 'Enter') updatePipelinePreview(); });
+pipelineReferenceInput?.addEventListener('input', schedulePipelinePreview);
 
 boot();
