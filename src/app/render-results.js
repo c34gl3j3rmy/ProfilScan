@@ -1,5 +1,6 @@
 export function renderResults(result) {
   const canvas = document.querySelector('#resultCanvas');
+  canvas.style.filter = 'none';
   const ctx = canvas.getContext('2d');
   canvas.width = result.width;
   canvas.height = result.height;
@@ -7,7 +8,7 @@ export function renderResults(result) {
   if (result.preview) {
     const brightness = result.settings?.image?.brightness ?? 0;
     const contrast = result.settings?.image?.contrast ?? 100;
-    ctx.filter = `brightness(${100 + brightness}%) contrast(${contrast}%)`;
+    ctx.filter = `brightness(${Math.max(0, 100 + brightness)}%) contrast(${Math.max(0, contrast)}%)`;
     ctx.drawImage(result.preview, 0, 0);
     ctx.filter = 'none';
   } else {
