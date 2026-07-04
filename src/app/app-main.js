@@ -1,11 +1,12 @@
 import { startCamera, stopCamera, captureFrame } from './camera.js';
 import { loadImageFile } from './image-import.js';
+import { renderPipelinePreview } from './pipeline-preview.js';
 import { renderResults } from './render-results.js';
 import { bindRange, buildSettings } from './settings-reader.js';
 import { computeAutoImageSettings, applyAutoImageSettings } from './auto-settings.js';
 import { getCollection, saveCollection } from '../storage/indexed-db.js';
-import { buildShapeFingerprint } from '../shape-engine/signature-builder.js';
 import { DEFAULT_PIPELINE_SETTINGS, normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
+import { buildRasterizedShapeFingerprint } from '../shape-engine/svg-raster-signature.js';
 
 const screens = {
   noBase: document.querySelector('#screenNoBase'),
@@ -31,6 +32,7 @@ const pipelineSettingsButton = document.querySelector('#pipelineSettingsButton')
 const pipelineReferenceInput = document.querySelector('#pipelineReferenceInput');
 const pipelineRandomProfileButton = document.querySelector('#pipelineRandomProfileButton');
 const pipelineShowProfileButton = document.querySelector('#pipelineShowProfileButton');
+const pipelinePreviewCanvas = document.querySelector('#pipelinePreviewCanvas');
 const pipelinePreviewStatus = document.querySelector('#pipelinePreviewStatus');
 const pipelinePreviewOutput = document.querySelector('#pipelinePreviewOutput');
 const closePipelineSettingsButton = document.querySelector('#closePipelineSettingsButton');
@@ -88,6 +90,7 @@ let cropBox = null;
 let cropDragging = false;
 let currentPipelineSettings = normalizePipelineSettings(DEFAULT_PIPELINE_SETTINGS);
 let pipelinePreviewTimer = null;
+let pipelinePreviewRun = 0;
 
 Object.values(inputs).forEach(input => {
   if (input) input.addEventListener('input', scheduleLiveAnalysis);
@@ -355,8 +358,9 @@ function selectRandomPipelineProfile() {
   updatePipelinePreview();
 }
 
-function updatePipelinePreview() {
+async function updatePipelinePreview() {
   if (!pipelinePreviewOutput) return;
+  const run = ++pipelinePreviewRun;
   const settings = buildPipelineSettingsFromInputs();
   const reference = pipelineReferenceInput?.value.trim().toLowerCase();
   const profile = findProfile(reference) || collection?.profiles?.[0];
@@ -364,12 +368,30 @@ function updatePipelinePreview() {
   if (!profile) {
     pipelinePreviewStatus.textContent = 'Aucun profil disponible.';
     pipelinePreviewOutput.value = '';
+    clearPipelinePreviewCanvas();
     return;
   }
 
-  const fingerprint = buildShapeFingerprint(profile, settings);
-  pipelinePreviewStatus.textContent = `${profile.reference} - ${profile.designation || 'Sans designation'} · grille ${settings.fillGridSize} x ${settings.fillGridSize}`;
-  pipelinePreviewOutput.value = JSON.stringify(buildSignatureExport(profile, fingerprint), null, 2);
+  pipelinePreviewStatus.textContent = `${profile.reference} - ${profile.designation || 'Sans designation'} · calcul de l'aperçu...`;
+  try {
+    const fingerprint = await buildRasterizedShapeFingerprint(profile, settings);
+    if (run !== pipelinePreviewRun) return;
+    const previewFingerprint = fingerprint || profile.fingerprint;
+    renderPipelinePreview(pipelinePreviewCanvas, profile, previewFingerprint);
+    pipelinePreviewStatus.textContent = `${profile.reference} - ${profile.designation || 'Sans designation'} · ${previewFingerprint?.summary?.source || 'signature'} · grille ${settings.fillGridSize} x ${settings.fillGridSize}`;
+    pipelinePreviewOutput.value = JSON.stringify(buildSignatureExport(profile, previewFingerprint), null, 2);
+  } catch (error) {
+    if (run !== pipelinePreviewRun) return;
+    renderPipelinePreview(pipelinePreviewCanvas, profile, profile.fingerprint);
+    pipelinePreviewStatus.textContent = `${profile.reference} - aperçu raster indisponible : ${formatError(error)}`;
+    pipelinePreviewOutput.value = JSON.stringify(buildSignatureExport(profile), null, 2);
+  }
+}
+
+function clearPipelinePreviewCanvas() {
+  if (!pipelinePreviewCanvas) return;
+  const ctx = pipelinePreviewCanvas.getContext('2d');
+  ctx.clearRect(0, 0, pipelinePreviewCanvas.width, pipelinePreviewCanvas.height);
 }
 
 async function copySignatureOutput() {
@@ -590,13 +612,13 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
 }
 
-profileDbInput.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
-replaceProfileDbInput.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
-imageInput.addEventListener('change', async event => analyzeImage(await loadImageFile(event.target.files[0])));
-cameraButton.addEventListener('click', async () => { show('camera'); await startCamera(video); });
-captureButton.addEventListener('click', async () => { const imageBitmap = await captureFrame(video); stopCamera(video); await analyzeImage(imageBitmap); });
-cancelCameraButton.addEventListener('click', () => { stopCamera(video); show('home'); });
-newAnalysisButton.addEventListener('click', () => show('home'));
+profileDbInput?.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
+replaceProfileDbInput?.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
+imageInput?.addEventListener('change', async event => analyzeImage(await loadImageFile(event.target.files[0])));
+cameraButton?.addEventListener('click', async () => { show('camera'); await startCamera(video); });
+captureButton?.addEventListener('click', async () => { const imageBitmap = await captureFrame(video); stopCamera(video); await analyzeImage(imageBitmap); });
+cancelCameraButton?.addEventListener('click', () => { stopCamera(video); show('home'); });
+newAnalysisButton?.addEventListener('click', () => show('home'));
 refreshAppButton?.addEventListener('click', refreshApplication);
 signatureDebugButton?.addEventListener('click', openSignatureScreen);
 pipelineSettingsButton?.addEventListener('click', openPipelineSettingsScreen);
