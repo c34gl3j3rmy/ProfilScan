@@ -1,4 +1,5 @@
 import './reset-app.js';
+import './live-slider-preview.js';
 import { startCamera, stopCamera, captureFrame } from './camera.js';
 import { loadImageFile } from './image-import.js';
 import { renderPipelinePreview } from './pipeline-preview.js';
