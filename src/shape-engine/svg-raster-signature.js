@@ -10,7 +10,7 @@ export async function buildRasterizedShapeFingerprint(profile, pipelineSettings 
 
   const rasterSize = Math.max(384, settings.fillGridSize * 4);
   const mask = rasterizeOutline(outline, bounds, rasterSize);
-  const points = extractBoundaryPoints(mask, rasterSize, rasterSize);
+  const points = extractOrderedBoundaryPoints(mask, rasterSize, rasterSize, settings.contourPointCount);
   if (!points.length) return null;
 
   const fingerprint = buildDetectedFingerprintFromPoints({
@@ -22,7 +22,7 @@ export async function buildRasterizedShapeFingerprint(profile, pipelineSettings 
   }, settings);
 
   fingerprint.reference = profile.reference;
-  fingerprint.summary.source = 'svg-raster-js';
+  fingerprint.summary.source = 'svg-raster-js-ordered';
   fingerprint.summary.rasterSize = rasterSize;
   fingerprint.summary.rasterBlackPixels = countMask(mask);
   fingerprint.summary.rasterBoundaryPoints = points.length;
@@ -54,33 +54,100 @@ function rasterizeOutline(points, bounds, rasterSize) {
   return mask;
 }
 
-function extractBoundaryPoints(mask, width, height) {
-  const points = [];
+function extractOrderedBoundaryPoints(mask, width, height, targetCount) {
+  const boundary = [];
+  const boundarySet = new Set();
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const index = y * width + x;
       if (!mask[index]) continue;
-      if (!mask[index - 1] || !mask[index + 1] || !mask[index - width] || !mask[index + width]) points.push({ x, y });
+      if (!mask[index - 1] || !mask[index + 1] || !mask[index - width] || !mask[index + width]) {
+        const point = { x, y };
+        boundary.push(point);
+        boundarySet.add(key(point));
+      }
     }
   }
-  return simplifyRasterPoints(points, 900);
+  const ordered = orderBoundaryPoints(boundary, boundarySet);
+  return resampleClosedPath(ordered, targetCount);
 }
 
-function simplifyRasterPoints(points, maxPoints) {
-  const sorted = sortAroundCenter(points);
-  if (sorted.length <= maxPoints) return sorted;
-  const step = sorted.length / maxPoints;
+function orderBoundaryPoints(points, pointSet) {
+  if (points.length <= 2) return points;
+  const remaining = new Map(points.map(point => [key(point), point]));
+  let current = points.reduce((best, point) => point.y < best.y || (point.y === best.y && point.x < best.x) ? point : best, points[0]);
   const output = [];
-  for (let index = 0; index < maxPoints; index++) output.push(sorted[Math.floor(index * step)]);
+
+  while (remaining.size) {
+    output.push(current);
+    remaining.delete(key(current));
+    const next = findNextNeighbor(current, remaining, pointSet) || findNearest(current, remaining);
+    if (!next) break;
+    current = next;
+  }
+
   return output;
 }
 
-function sortAroundCenter(points) {
+function findNextNeighbor(point, remaining, pointSet) {
+  let best = null;
+  let bestDistance = Infinity;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const candidateKey = `${point.x + dx},${point.y + dy}`;
+      if (!pointSet.has(candidateKey) || !remaining.has(candidateKey)) continue;
+      const distance = dx * dx + dy * dy;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = remaining.get(candidateKey);
+      }
+    }
+  }
+  return best;
+}
+
+function findNearest(point, remaining) {
+  let best = null;
+  let bestDistance = Infinity;
+  for (const candidate of remaining.values()) {
+    const distance = (candidate.x - point.x) ** 2 + (candidate.y - point.y) ** 2;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function resampleClosedPath(points, targetCount) {
   if (points.length <= 2) return points;
-  const center = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
-  center.x /= points.length;
-  center.y /= points.length;
-  return [...points].sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
+  const distances = [0];
+  let total = 0;
+  for (let index = 1; index <= points.length; index++) {
+    const previous = points[index - 1];
+    const current = points[index % points.length];
+    total += Math.hypot(current.x - previous.x, current.y - previous.y);
+    distances.push(total);
+  }
+  if (!total) return points.slice(0, targetCount);
+
+  const output = [];
+  for (let index = 0; index < targetCount; index++) {
+    const target = (index / targetCount) * total;
+    let segment = 1;
+    while (segment < distances.length - 1 && distances[segment] < target) segment++;
+    const previous = points[segment - 1];
+    const current = points[segment % points.length];
+    const segmentLength = distances[segment] - distances[segment - 1] || 1;
+    const t = (target - distances[segment - 1]) / segmentLength;
+    output.push({ x: previous.x + (current.x - previous.x) * t, y: previous.y + (current.y - previous.y) * t });
+  }
+  return output;
+}
+
+function key(point) {
+  return `${Math.round(point.x)},${Math.round(point.y)}`;
 }
 
 function countMask(mask) {
