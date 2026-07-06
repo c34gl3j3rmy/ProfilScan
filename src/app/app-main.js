@@ -449,6 +449,7 @@ function buildAnalysisReport() {
   const expected = findProfile(expectedProfileInput?.value.trim().toLowerCase());
   const best = lastResult.items?.[0] || null;
   const expectedCandidate = expected ? findCandidate(expected.reference) : null;
+  const algorithmAudit = buildAlgorithmAudit(best, expectedCandidate, expected);
 
   return {
     type: 'ProfilScan analysis report',
@@ -473,6 +474,7 @@ function buildAnalysisReport() {
     expectedProfile: expected ? buildSignatureExport(expected) : null,
     bestMatch: best,
     expectedCandidate,
+    algorithmAudit,
     topCandidates: (best?.topCandidates || []).slice(0, 10).map(candidate => ({
       reference: candidate.reference,
       designation: candidate.designation,
@@ -487,11 +489,99 @@ function buildAnalysisReport() {
   };
 }
 
+function buildAlgorithmAudit(best, expectedCandidate, expectedProfile) {
+  const expectedReference = expectedProfile?.reference || '';
+  const bestReference = best?.reference || '';
+  const expectedFound = Boolean(expectedCandidate);
+  const rows = ALGORITHM_AUDIT_KEYS.map(key => {
+    const bestScore = scoreValue(best, key);
+    const expectedScore = scoreValue(expectedCandidate, key);
+    const delta = expectedFound ? expectedScore - bestScore : null;
+    return {
+      key,
+      label: ALGORITHM_LABELS[key] || key,
+      bestScore,
+      expectedScore: expectedFound ? expectedScore : null,
+      delta,
+      verdict: expectedFound ? algorithmVerdict(delta) : 'expected-not-in-top-candidates'
+    };
+  });
+
+  return {
+    expectedReference,
+    bestReference,
+    expectedFound,
+    expectedWins: rows.filter(row => Number(row.delta) > 0).map(row => row.key),
+    bestWins: rows.filter(row => Number(row.delta) < 0).map(row => row.key),
+    neutral: rows.filter(row => row.delta === 0).map(row => row.key),
+    rows,
+    notes: [
+      'expectedScore = score du profil attendu dans les candidats retrouves',
+      'bestScore = score du meilleur profil propose par ProfilScan',
+      'delta positif = algorithme favorable au profil attendu',
+      'delta negatif = algorithme favorable au mauvais meilleur candidat'
+    ]
+  };
+}
+
+const ALGORITHM_AUDIT_KEYS = [
+  'ratio',
+  'radial',
+  'hu',
+  'fourier',
+  'angle',
+  'fill',
+  'advanced',
+  'hausdorff',
+  'shapeContext',
+  'icp',
+  'ransac',
+  'zernike'
+];
+
+const ALGORITHM_LABELS = {
+  ratio: 'Ratio largeur/hauteur',
+  radial: 'Signature radiale',
+  hu: 'Moments de Hu',
+  fourier: 'Descripteurs de Fourier',
+  angle: 'Histogramme des angles',
+  fill: 'Taux de remplissage',
+  advanced: 'Fusion avancee',
+  hausdorff: 'Distance de Hausdorff',
+  shapeContext: 'Shape Context',
+  icp: 'ICP',
+  ransac: 'RANSAC lignes',
+  zernike: 'Zernike-like'
+};
+
+function scoreValue(candidate, key) {
+  if (!candidate) return null;
+  if (key === 'score') return roundedScore(candidate.score);
+  return roundedScore(candidate.scoreDetails?.subscores?.[key]);
+}
+
+function roundedScore(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 100) / 100 : null;
+}
+
+function algorithmVerdict(delta) {
+  if (!Number.isFinite(delta)) return 'unknown';
+  if (delta >= 8) return 'strong-for-expected';
+  if (delta > 0) return 'for-expected';
+  if (delta <= -8) return 'strong-for-best';
+  if (delta < 0) return 'for-best';
+  return 'neutral';
+}
+
 function findCandidate(reference) {
   const target = String(reference || '').toLowerCase();
-  for (const item of lastResult.items || []) {
-    const candidate = item.topCandidates?.find(entry => entry.reference.toLowerCase() === target);
-    if (candidate) return candidate;
+  for (const [itemIndex, item] of (lastResult.items || []).entries()) {
+    const candidateIndex = item.topCandidates?.findIndex(entry => entry.reference.toLowerCase() === target) ?? -1;
+    if (candidateIndex >= 0) {
+      const candidate = item.topCandidates[candidateIndex];
+      return { ...candidate, detectedItemIndex: itemIndex, candidateRank: candidateIndex + 1 };
+    }
   }
   return null;
 }
@@ -518,152 +608,142 @@ function toggleCompactVision() {
 }
 
 async function toggleCropMode() {
-  if (!sourceImage) return;
-  if (cropMode && cropBox) {
-    await applyCrop();
-    return;
-  }
+  if (!lastResult || !resultCanvas) return;
   cropMode = !cropMode;
-  cropBox = null;
   cropStart = null;
-  cropDragging = false;
-  resultCanvas?.classList.toggle('crop-mode', cropMode);
-  cropImageButton.textContent = cropMode ? 'Trace la zone' : 'Recadrer';
-  if (lastResult) renderResults(lastResult);
+  cropBox = null;
+  cropImageButton.textContent = cropMode ? 'Valider recadrage' : 'Recadrer';
+  resultCanvas.classList.toggle('crop-mode', cropMode);
+  if (!cropMode && sourceImage) await applyCropAndAnalyze();
 }
 
 function exitCropMode() {
   cropMode = false;
   cropStart = null;
-  cropDragging = false;
   cropBox = null;
+  cropImageButton.textContent = 'Recadrer';
   resultCanvas?.classList.remove('crop-mode');
-  if (cropImageButton) cropImageButton.textContent = 'Recadrer';
-}
-
-function startCrop(event) {
-  if (!cropMode || !lastResult) return;
-  cropDragging = true;
-  cropStart = canvasPoint(event);
-  cropBox = { x: cropStart.x, y: cropStart.y, width: 0, height: 0 };
-  resultCanvas.setPointerCapture(event.pointerId);
-}
-
-function moveCrop(event) {
-  if (!cropMode || !cropDragging || !cropStart || !lastResult) return;
-  const point = canvasPoint(event);
-  cropBox = normalizeCropBox(cropStart, point);
-  renderCropPreview();
-}
-
-function endCrop() {
-  if (!cropMode || !cropDragging) return;
-  cropDragging = false;
-  if (!cropBox || cropBox.width < 20 || cropBox.height < 20) {
-    cropBox = null;
-    cropImageButton.textContent = 'Trace la zone';
-    if (lastResult) renderResults(lastResult);
-    return;
-  }
-  cropImageButton.textContent = 'Appliquer recadrage';
-  renderCropPreview();
-}
-
-async function applyCrop() {
-  if (!cropBox || !sourceImage) return;
-  const cropped = await createCroppedBitmap(sourceImage, cropBox);
-  await analyzeImage(cropped);
-}
-
-async function createCroppedBitmap(imageBitmap, box) {
-  const width = Math.max(1, Math.round(box.width));
-  const height = Math.max(1, Math.round(box.height));
-  const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(imageBitmap, Math.round(box.x), Math.round(box.y), width, height, 0, 0, width, height);
-  return createImageBitmap(canvas);
-}
-
-function renderCropPreview() {
-  renderResults(lastResult);
-  const ctx = resultCanvas.getContext('2d');
-  ctx.save();
-  ctx.fillStyle = 'rgba(15,23,42,.35)';
-  ctx.fillRect(0, 0, resultCanvas.width, resultCanvas.height);
-  if (cropBox) {
-    ctx.clearRect(cropBox.x, cropBox.y, cropBox.width, cropBox.height);
-    renderResults(lastResult);
-    ctx.save();
-    ctx.fillStyle = 'rgba(15,23,42,.35)';
-    ctx.fillRect(0, 0, resultCanvas.width, cropBox.y);
-    ctx.fillRect(0, cropBox.y + cropBox.height, resultCanvas.width, resultCanvas.height - cropBox.y - cropBox.height);
-    ctx.fillRect(0, cropBox.y, cropBox.x, cropBox.height);
-    ctx.fillRect(cropBox.x + cropBox.width, cropBox.y, resultCanvas.width - cropBox.x - cropBox.width, cropBox.height);
-    ctx.strokeStyle = '#38bdf8';
-    ctx.lineWidth = Math.max(2, resultCanvas.width / 350);
-    ctx.strokeRect(cropBox.x, cropBox.y, cropBox.width, cropBox.height);
-    ctx.restore();
-  }
-  ctx.restore();
 }
 
 function canvasPoint(event) {
   const rect = resultCanvas.getBoundingClientRect();
-  const x = (event.clientX - rect.left) * (resultCanvas.width / rect.width);
-  const y = (event.clientY - rect.top) * (resultCanvas.height / rect.height);
+  const scaleX = resultCanvas.width / rect.width;
+  const scaleY = resultCanvas.height / rect.height;
   return {
-    x: Math.max(0, Math.min(resultCanvas.width, x)),
-    y: Math.max(0, Math.min(resultCanvas.height, y))
+    x: Math.round((event.clientX - rect.left) * scaleX),
+    y: Math.round((event.clientY - rect.top) * scaleY)
   };
+}
+
+function onCanvasPointerDown(event) {
+  if (!cropMode) return;
+  cropDragging = true;
+  cropStart = canvasPoint(event);
+  cropBox = { x: cropStart.x, y: cropStart.y, width: 1, height: 1 };
+}
+
+function onCanvasPointerMove(event) {
+  if (!cropMode || !cropDragging || !cropStart) return;
+  const point = canvasPoint(event);
+  cropBox = normalizeCropBox(cropStart, point);
+  renderResults(lastResult);
+  drawCropOverlay(cropBox);
+}
+
+function onCanvasPointerUp() {
+  cropDragging = false;
 }
 
 function normalizeCropBox(a, b) {
-  const x = Math.min(a.x, b.x);
-  const y = Math.min(a.y, b.y);
-  return {
-    x,
-    y,
-    width: Math.abs(b.x - a.x),
-    height: Math.abs(b.y - a.y)
-  };
+  const x = Math.max(0, Math.min(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y, b.y));
+  const right = Math.min(resultCanvas.width, Math.max(a.x, b.x));
+  const bottom = Math.min(resultCanvas.height, Math.max(a.y, b.y));
+  return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
+}
+
+function drawCropOverlay(box) {
+  if (!box) return;
+  const ctx = resultCanvas.getContext('2d');
+  ctx.save();
+  ctx.strokeStyle = '#22c55e';
+  ctx.lineWidth = Math.max(2, resultCanvas.width / 220);
+  ctx.setLineDash([8, 6]);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.restore();
+}
+
+async function applyCropAndAnalyze() {
+  if (!cropBox || cropBox.width < 20 || cropBox.height < 20 || !sourceImage) return;
+  const canvas = new OffscreenCanvas(cropBox.width, cropBox.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(sourceImage, cropBox.x, cropBox.y, cropBox.width, cropBox.height, 0, 0, cropBox.width, cropBox.height);
+  const cropped = canvas.transferToImageBitmap();
+  await analyzeImage(cropped);
+}
+
+function onImageFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  loadImageFile(file).then(analyzeImage).catch(error => showError(error, 'home'));
+  event.target.value = '';
+}
+
+async function onCapture() {
+  try {
+    const frame = await captureFrame(video);
+    stopCamera(video);
+    await analyzeImage(frame);
+  } catch (error) {
+    showError(error, 'home');
+  }
+}
+
+async function openCamera() {
+  try {
+    show('camera');
+    await startCamera(video);
+  } catch (error) {
+    showError(error, 'home');
+  }
+}
+
+function cancelCamera() {
+  stopCamera(video);
+  goBackSafe();
 }
 
 function roundArray(values) {
-  if (!Array.isArray(values)) return [];
-  return values.map(value => typeof value === 'number' ? Number(value.toFixed(6)) : value);
+  return Array.isArray(values) ? values.map(value => Math.round(value * 1000000) / 1000000) : [];
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+  return String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 }
 
-profileDbInput?.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
-replaceProfileDbInput?.addEventListener('change', event => importBaseFromFile(event.target.files[0]));
-imageInput?.addEventListener('change', async event => analyzeImage(await loadImageFile(event.target.files[0])));
-cameraButton?.addEventListener('click', async () => { show('camera'); await startCamera(video); });
-captureButton?.addEventListener('click', async () => { const imageBitmap = await captureFrame(video); stopCamera(video); await analyzeImage(imageBitmap); });
-cancelCameraButton?.addEventListener('click', () => { stopCamera(video); goBackSafe(); });
+profileDbInput?.addEventListener('change', event => importBaseFromFile(event.target.files?.[0]));
+replaceProfileDbInput?.addEventListener('change', event => importBaseFromFile(event.target.files?.[0]));
+imageInput?.addEventListener('change', onImageFile);
+cameraButton?.addEventListener('click', openCamera);
+captureButton?.addEventListener('click', onCapture);
+cancelCameraButton?.addEventListener('click', cancelCamera);
 newAnalysisButton?.addEventListener('click', () => show('home'));
 signatureDebugButton?.addEventListener('click', openSignatureScreen);
+showSignatureButton?.addEventListener('click', showSignature);
+copySignatureButton?.addEventListener('click', copySignatureOutput);
+closeSignatureButton?.addEventListener('click', goBackSafe);
+copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
+compactVisionButton?.addEventListener('click', toggleCompactVision);
+cropImageButton?.addEventListener('click', toggleCropMode);
+autoSettingsButton?.addEventListener('click', rerunAutoSettings);
+resultCanvas?.addEventListener('pointerdown', onCanvasPointerDown);
+resultCanvas?.addEventListener('pointermove', onCanvasPointerMove);
+resultCanvas?.addEventListener('pointerup', onCanvasPointerUp);
+resultCanvas?.addEventListener('pointerleave', onCanvasPointerUp);
 pipelineSettingsButton?.addEventListener('click', openPipelineSettingsScreen);
 pipelineRandomProfileButton?.addEventListener('click', selectRandomPipelineProfile);
 pipelineShowProfileButton?.addEventListener('click', updatePipelinePreview);
-closePipelineSettingsButton?.addEventListener('click', goBackSafe);
-showSignatureButton?.addEventListener('click', showSignature);
-copySignatureButton?.addEventListener('click', copySignatureOutput);
-copyAnalysisReportButton?.addEventListener('click', copyAnalysisReport);
-autoSettingsButton?.addEventListener('click', rerunAutoSettings);
-compactVisionButton?.addEventListener('click', toggleCompactVision);
-cropImageButton?.addEventListener('click', toggleCropMode);
-resultCanvas?.addEventListener('pointerdown', startCrop);
-resultCanvas?.addEventListener('pointermove', moveCrop);
-resultCanvas?.addEventListener('pointerup', endCrop);
-resultCanvas?.addEventListener('pointercancel', endCrop);
-closeSignatureButton?.addEventListener('click', goBackSafe);
-signatureSearchInput?.addEventListener('keydown', event => { if (event.key === 'Enter') showSignature(); });
-pipelineReferenceInput?.addEventListener('keydown', event => { if (event.key === 'Enter') updatePipelinePreview(); });
 pipelineReferenceInput?.addEventListener('input', schedulePipelinePreview);
+closePipelineSettingsButton?.addEventListener('click', goBackSafe);
 
-boot();
+boot().catch(error => showError(error));
