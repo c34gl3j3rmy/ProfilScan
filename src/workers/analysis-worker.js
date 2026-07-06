@@ -2,7 +2,7 @@ import { findTopMatches } from '../shape-engine/candidate-search.js';
 import { buildDetectedFingerprintFromPoints } from '../shape-engine/signature-builder.js';
 import { traceBoundary } from './contour-tracer.js';
 import { getScaledImageData, buildGray, suppressTexture, blurGray } from './image-preprocessing.js';
-import { buildCannyEdgeMask } from './canny-edge.js';
+import { buildRobustEdgeMask } from './robust-segmentation.js';
 import { selectSectionCandidates } from './section-candidates.js';
 
 const DEFAULT_SETTINGS = {
@@ -23,10 +23,11 @@ self.onmessage = async event => {
     const gray = buildGray(source.imageData, activeSettings.image);
     const denoised = suppressTexture(gray, source.width, source.height, activeSettings.image.textureSuppression);
     const blurred = blurGray(denoised, source.width, source.height, activeSettings.image.blurRadius);
-    postProgress(40, 'Detection Canny', `Seuil dynamique : ${Math.round(activeSettings.detection.edgeQuantile * 100)} %`);
-    const edges = buildCannyEdgeMask(blurred, source.width, source.height, activeSettings.detection.edgeQuantile);
+    postProgress(40, 'Segmentation robuste', `Seuil dynamique : ${Math.round(activeSettings.detection.edgeQuantile * 100)} %`);
+    const segmentation = buildRobustEdgeMask(blurred, source.width, source.height, activeSettings.detection);
+    const edges = segmentation.mask;
     const edgePoints = sampleMaskPoints(edges, source.width, source.height, source.scale, 4500);
-    postProgress(55, 'Connexion des contours', `${edgePoints.length} points contours visibles`);
+    postProgress(55, 'Connexion des contours', `${edgePoints.length} points contours visibles · mode ${segmentation.mode}`);
     const linkedEdges = dilate(edges, source.width, source.height, activeSettings.detection.linkRadius);
     postProgress(68, 'Recherche des sections', 'Selection des faces candidates');
     const components = findComponents(linkedEdges, source.width, source.height);
@@ -37,6 +38,8 @@ self.onmessage = async event => {
     const items = objects.map(object => matchObject(object, collection, activeSettings.weights));
     const debug = {
       edges: edgePoints,
+      segmentation: segmentation.stats,
+      segmentationMode: segmentation.mode,
       sectionCandidates: objects.map(object => ({
         x: object.x,
         y: object.y,
