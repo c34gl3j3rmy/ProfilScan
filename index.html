@@ -127,6 +127,14 @@
           <input id="contrastInput" type="range" min="0" max="220" value="100">
           <small>Droite = renforce les differences entre profil et fond.</small>
         </label>
+        <label class="range-row">Flou contours <output id="blurRadiusValue">1</output> px
+          <input id="blurRadiusInput" type="range" min="0" max="5" value="1">
+          <small>Gauche = details fins · droite = moins de bruit avant detection.</small>
+        </label>
+        <label class="range-row">Suppression texture metal <output id="textureSuppressionValue">0</output>
+          <input id="textureSuppressionInput" type="range" min="0" max="6" value="0">
+          <small>Droite = reduit les stries et reflets fins de l'aluminium.</small>
+        </label>
 
         <h3>Detection image</h3>
         <label class="range-row">Seuil contour <output id="edgeQuantileValue">82</output>%
