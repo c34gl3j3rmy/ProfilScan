@@ -4,6 +4,7 @@ import { icpScore } from './icp.js';
 import { ransacLineScore } from './ransac.js';
 import { zernikeLikeScore } from './zernike.js';
 import { fuseScores } from './score-fusion.js';
+import { normalizePoints } from './shape-normalizer.js';
 
 const DEFAULT_WEIGHTS = {
   ratio: 0.28,
@@ -66,6 +67,7 @@ function compareProfileDetailed(detected, profile, customWeights = null) {
       advanced: Math.round(advancedScore),
       advancedRaw: Math.round(advanced.score),
       ratioGate: Math.round(ratioGate * 100),
+      alignment: advanced.alignment,
       ...advanced.subscores
     },
     weights: {
@@ -114,16 +116,52 @@ function compareAdvancedScores(detected, profile) {
   const referencePoints = profile.dna?.contour?.normalizedPoints || profile.fingerprint?.descriptors?.points;
   if (!detectedPoints?.length || !referencePoints?.length) return null;
 
-  return fuseScores(
-    {
-      hausdorff: hausdorffScore(detectedPoints, referencePoints),
-      shapeContext: shapeContextScore(detectedPoints, referencePoints),
-      icp: icpScore(detectedPoints, referencePoints),
-      ransac: Math.min(ransacLineScore(detectedPoints), ransacLineScore(referencePoints)),
-      zernike: zernikeLikeScore(detectedPoints, referencePoints)
-    },
-    ADVANCED_WEIGHTS
-  );
+  const target = normalizePoints(referencePoints);
+  const variants = buildAlignmentVariants(normalizePoints(detectedPoints));
+  let best = null;
+
+  for (const variant of variants) {
+    const candidate = fuseScores(
+      {
+        hausdorff: hausdorffScore(variant.points, target),
+        shapeContext: shapeContextScore(variant.points, target),
+        icp: icpScore(variant.points, target),
+        ransac: Math.min(ransacLineScore(variant.points), ransacLineScore(target)),
+        zernike: zernikeLikeScore(variant.points, target)
+      },
+      ADVANCED_WEIGHTS
+    );
+
+    if (!best || candidate.score > best.score) {
+      best = { ...candidate, alignment: variant.name };
+    }
+  }
+
+  return best;
+}
+
+function buildAlignmentVariants(points) {
+  const variants = [];
+  const mirrorModes = [false, true];
+  const rotations = [0, 90, 180, 270];
+
+  for (const mirror of mirrorModes) {
+    for (const rotation of rotations) {
+      variants.push({
+        name: `${mirror ? 'miroir-' : ''}rot${rotation}`,
+        points: points.map(point => rotatePoint(mirror ? { x: -point.x, y: point.y } : point, rotation))
+      });
+    }
+  }
+
+  return variants;
+}
+
+function rotatePoint(point, degrees) {
+  if (degrees === 90) return { x: -point.y, y: point.x };
+  if (degrees === 180) return { x: -point.x, y: -point.y };
+  if (degrees === 270) return { x: point.y, y: -point.x };
+  return { x: point.x, y: point.y };
 }
 
 function normalizeWeights(weights) {
