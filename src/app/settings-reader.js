@@ -17,7 +17,9 @@ export function buildSettings(inputs) {
     expectedReference: document.querySelector('#expectedProfileInput')?.value.trim() || '',
     image: {
       brightness: numberValue(inputs.brightness, 0),
-      contrast: numberValue(inputs.contrast, 100)
+      contrast: numberValue(inputs.contrast, 100),
+      blurRadius: rangeValue('blurRadiusInput', 1),
+      textureSuppression: rangeValue('textureSuppressionInput', 0)
     },
     detection: {
       edgeQuantile: numberValue(inputs.edgeQuantile, 82) / 100,
@@ -34,6 +36,11 @@ export function buildSettings(inputs) {
       fill: numberValue(inputs.weightFill, 5)
     }
   };
+}
+
+function rangeValue(inputId, fallback) {
+  const value = Number(document.querySelector(`#${inputId}`)?.value);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function numberValue(input, fallback) {
