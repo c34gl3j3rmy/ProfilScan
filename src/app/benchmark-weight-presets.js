@@ -33,8 +33,104 @@ const BASE_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill'];
 const ADVANCED_KEYS = ['hausdorff', 'shapeContext', 'icp', 'ransac', 'zernike'];
 
 export function buildWeightPresetBenchmark(results) {
-  return WEIGHT_PRESETS.map(preset => summarizePreset(results, preset))
-    .sort((a, b) => b.top1Accuracy - a.top1Accuracy || b.top3Accuracy - a.top3Accuracy);
+  const fixed = WEIGHT_PRESETS.map(preset => summarizePreset(results, preset));
+  const optimized = buildOptimizedWeightBenchmark(results, 800);
+  return [...fixed, ...optimized]
+    .sort((a, b) => b.top1Accuracy - a.top1Accuracy || b.top3Accuracy - a.top3Accuracy || b.top10Accuracy - a.top10Accuracy);
+}
+
+function buildOptimizedWeightBenchmark(results, maxCombinations) {
+  const candidates = generateWeightCandidates(maxCombinations).map((preset, index) => summarizePreset(results, {
+    ...preset,
+    name: 'auto-' + String(index + 1).padStart(3, '0'),
+    description: 'Combinaison generee automatiquement par le benchmark'
+  }));
+
+  const unique = [];
+  const seen = new Set();
+  for (const candidate of candidates.sort((a, b) => b.top1Accuracy - a.top1Accuracy || b.top3Accuracy - a.top3Accuracy || b.top10Accuracy - a.top10Accuracy)) {
+    const signature = JSON.stringify({ base: candidate.baseWeights, advanced: candidate.advancedWeight, details: candidate.advancedDetails });
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    unique.push(candidate);
+    if (unique.length >= 20) break;
+  }
+  return unique;
+}
+
+function generateWeightCandidates(maxCombinations) {
+  const baseCandidates = buildBaseWeightCandidates();
+  const advancedCandidates = buildAdvancedWeightCandidates();
+  const advancedWeights = [0.15, 0.25, 0.35, 0.45, 0.55];
+  const output = [];
+
+  for (const base of baseCandidates) {
+    for (const advancedDetails of advancedCandidates) {
+      for (const advancedWeight of advancedWeights) {
+        output.push({ base, advancedWeight, advancedDetails });
+        if (output.length >= maxCombinations) return output;
+      }
+    }
+  }
+
+  return output;
+}
+
+function buildBaseWeightCandidates() {
+  const output = [];
+  const ratios = [12, 18, 24, 30];
+  const radials = [24, 30, 36, 42];
+  const hus = [0, 2, 5, 8];
+  const fouriers = [6, 10, 14, 18];
+  const angles = [18, 24, 30, 36];
+  const fill = 4;
+
+  for (const ratio of ratios) {
+    for (const radial of radials) {
+      for (const hu of hus) {
+        for (const fourier of fouriers) {
+          for (const angle of angles) {
+            output.push(normalizeBaseWeights({ ratio, radial, hu, fourier, angle, fill }));
+          }
+        }
+      }
+    }
+  }
+  return output;
+}
+
+function buildAdvancedWeightCandidates() {
+  const output = [];
+  const hausdorffs = [35, 45, 55, 65];
+  const shapes = [5, 10, 15, 25];
+  const icps = [20, 30, 40, 50];
+  const ransacs = [0, 3, 6];
+  const zernikes = [5, 10, 15];
+
+  for (const hausdorff of hausdorffs) {
+    for (const shapeContext of shapes) {
+      for (const icp of icps) {
+        for (const ransac of ransacs) {
+          for (const zernike of zernikes) {
+            output.push(normalizeAdvancedWeights({ hausdorff, shapeContext, icp, ransac, zernike }));
+          }
+        }
+      }
+    }
+  }
+  return output;
+}
+
+function normalizeBaseWeights(weights) {
+  const total = sumValues(weights, BASE_KEYS);
+  if (total <= 0) return { ratio: 20, radial: 35, hu: 0, fourier: 10, angle: 30, fill: 5 };
+  return Object.fromEntries(BASE_KEYS.map(key => [key, Math.round((weights[key] || 0) * 100 / total)]));
+}
+
+function normalizeAdvancedWeights(weights) {
+  const total = sumValues(weights, ADVANCED_KEYS);
+  if (total <= 0) return { hausdorff: 45, shapeContext: 15, icp: 30, ransac: 0, zernike: 10 };
+  return Object.fromEntries(ADVANCED_KEYS.map(key => [key, Math.round((weights[key] || 0) * 100 / total)]));
 }
 
 function summarizePreset(results, preset) {
