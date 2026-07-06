@@ -83,28 +83,32 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
 
   const weights = isNormalizedWeightSet(customWeights) ? customWeights : normalizeWeights(customWeights || DEFAULT_WEIGHTS);
   const ratioScore = compareRatio(detected.summary?.normalizedRatio ?? detected.normalizedRatio, reference.summary?.normalizedRatio);
-  const radialScore = compareVectors(detected.descriptors?.radial, reference.descriptors?.radial, 1);
-  const angleScore = compareVectors(detected.descriptors?.angleHistogram, reference.descriptors?.angleHistogram, 1);
+  const radial = compareCircularVectors(detected.descriptors?.radial, reference.descriptors?.radial, 1);
+  const angle = compareCircularVectors(detected.descriptors?.angleHistogram, reference.descriptors?.angleHistogram, 1);
   const huScore = compareVectors(detected.descriptors?.hu, reference.descriptors?.hu, 20);
   const fourierScore = compareVectors(detected.descriptors?.fourier, reference.descriptors?.fourier, 1.4);
   const fillScore = compareFillRatio(detected.summary?.fillRatio ?? detected.fillRatio);
 
   const score =
     ratioScore * weights.ratio +
-    radialScore * weights.radial +
+    radial.score * weights.radial +
     huScore * weights.hu +
     fourierScore * weights.fourier +
-    angleScore * weights.angle +
+    angle.score * weights.angle +
     fillScore * weights.fill;
 
   return {
     score: clampScore(score),
     subscores: {
       ratio: Math.round(ratioScore),
-      radial: Math.round(radialScore),
+      radial: Math.round(radial.score),
+      radialShift: radial.shift,
+      radialReversed: radial.reversed ? 1 : 0,
       hu: Math.round(huScore),
       fourier: Math.round(fourierScore),
-      angle: Math.round(angleScore),
+      angle: Math.round(angle.score),
+      angleShift: angle.shift,
+      angleReversed: angle.reversed ? 1 : 0,
       fill: Math.round(fillScore)
     },
     weights
@@ -212,6 +216,38 @@ function compareRatio(a, b) {
   const rotatedDistance = Math.abs(a + b);
   const distance = Math.min(directDistance, rotatedDistance);
   return clampScore(100 * (1 - distance / Math.log(2)));
+}
+
+function compareCircularVectors(a, b, distanceScale = 1) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) {
+    return { score: 0, shift: 0, reversed: false };
+  }
+
+  const length = Math.min(a.length, b.length);
+  const forward = bestCircularVectorScore(a, b, length, distanceScale, false);
+  const reversed = bestCircularVectorScore(a, b, length, distanceScale, true);
+  return reversed.score > forward.score ? reversed : forward;
+}
+
+function bestCircularVectorScore(a, b, length, distanceScale, reversed) {
+  let best = { score: 0, shift: 0, reversed };
+
+  for (let shift = 0; shift < length; shift++) {
+    let sum = 0;
+    for (let i = 0; i < length; i++) {
+      const ai = reversed ? length - 1 - i : i;
+      const bi = (i + shift) % length;
+      const av = Number(a[ai]) || 0;
+      const bv = Number(b[bi]) || 0;
+      sum += Math.abs(av - bv);
+    }
+
+    const averageDistance = sum / length;
+    const score = clampScore(100 * (1 - averageDistance / distanceScale));
+    if (score > best.score) best = { score, shift, reversed };
+  }
+
+  return best;
 }
 
 function compareVectors(a, b, distanceScale = 1) {
