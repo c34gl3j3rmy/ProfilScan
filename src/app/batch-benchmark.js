@@ -2,6 +2,7 @@ import { loadImageFile } from './image-import.js';
 import { computeAutoImageSettings, applyAutoImageSettings } from './auto-settings.js';
 import { buildSettings } from './settings-reader.js';
 import { getCollection } from '../storage/indexed-db.js';
+import { buildWeightPresetBenchmark } from './benchmark-weight-presets.js';
 
 const benchmarkInput = document.querySelector('#benchmarkInput');
 const baseStatus = document.querySelector('#baseStatus');
@@ -32,7 +33,7 @@ let worker = null;
 benchmarkInput?.addEventListener('change', event => runBenchmark(event.target.files));
 
 async function runBenchmark(fileList) {
-  const files = Array.from(fileList || []).filter(file => /^image\//.test(file.type) || /\.(svg|jpg|jpeg|png|webp)$/i.test(file.name));
+  const files = Array.from(fileList || []).filter(isImageFile);
   benchmarkInput.value = '';
   if (!files.length) return;
 
@@ -51,7 +52,7 @@ async function runBenchmark(fileList) {
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     const expectedReference = referenceFromFilename(file.name);
-    setProgress(Math.round((index / files.length) * 100), 'Benchmark lot', `${index + 1}/${files.length} · ${file.name} · attendu ${expectedReference}`);
+    setProgress(Math.round(index / files.length * 100), 'Benchmark lot', String(index + 1) + '/' + files.length + ' - ' + file.name + ' - attendu ' + expectedReference);
     try {
       const imageBitmap = await loadImageFile(file);
       const autoSettings = await computeAutoImageSettings(imageBitmap);
@@ -61,17 +62,23 @@ async function runBenchmark(fileList) {
       const analysis = await analyzeBitmap(imageBitmap, collection, settings);
       const result = summarizeImageResult(file, expectedReference, autoSettings, settings, analysis, collection);
       results.push(result);
-      setProgress(Math.round(((index + 1) / files.length) * 100), result.success ? 'Profil correct' : 'Profil incorrect', `${file.name} -> ${result.bestReference || 'aucun'} (${Math.round(result.bestScore || 0)}%)`);
+      setProgress(Math.round((index + 1) / files.length * 100), result.success ? 'Profil correct' : 'Profil incorrect', file.name + ' -> ' + (result.bestReference || 'aucun') + ' (' + Math.round(result.bestScore || 0) + '%)');
     } catch (error) {
       errors.push({ fileName: file.name, expectedReference, message: formatError(error) });
-      setProgress(Math.round(((index + 1) / files.length) * 100), 'Erreur image', `${file.name} · ${formatError(error)}`, 'error');
+      setProgress(Math.round((index + 1) / files.length * 100), 'Erreur image', file.name + ' - ' + formatError(error), 'error');
     }
   }
 
   const report = buildBenchmarkReport({ startedAt, files, results, errors, collection });
-  saveJsonFile(report, `profilscan-benchmark-${timestampForFile()}.json`);
-  setProgress(100, 'Benchmark termine', `${results.length} images analysees · ${report.summary.top1Accuracy}% Top 1 · ${report.summary.top3Accuracy}% Top 3 · rapport genere`, 'done');
-  setBenchmarkStatus(`Benchmark termine : ${report.summary.top1Accuracy}% Top 1 · ${report.summary.top3Accuracy}% Top 3`);
+  saveJsonFile(report, 'profilscan-benchmark-' + timestampForFile() + '.json');
+  const bestPreset = report.weightPresetBenchmark && report.weightPresetBenchmark[0];
+  const bestText = bestPreset ? ' - meilleur preset ' + bestPreset.name + ' : ' + bestPreset.top1Accuracy + '% Top 1' : '';
+  setProgress(100, 'Benchmark termine', results.length + ' images analysees - ' + report.summary.top1Accuracy + '% Top 1 - ' + report.summary.top3Accuracy + '% Top 3' + bestText + ' - rapport genere', 'done');
+  setBenchmarkStatus('Benchmark termine : ' + report.summary.top1Accuracy + '% Top 1 - meilleur preset ' + (bestPreset?.top1Accuracy ?? '-') + '%');
+}
+
+function isImageFile(file) {
+  return /^image\//.test(file.type) || /\.(svg|jpg|jpeg|png|webp)$/i.test(file.name);
 }
 
 function getWorker() {
@@ -140,13 +147,14 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
 function buildBenchmarkReport({ startedAt, files, results, errors, collection }) {
   return {
     type: 'ProfilScan batch benchmark report',
-    version: 'batch-benchmark-v1',
+    version: 'batch-benchmark-v2',
     startedAt,
     completedAt: new Date().toISOString(),
     input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension' },
     base: { name: collection?.name, profiles: collection?.profiles?.length, importedAt: collection?.importedAt, pipelineSettings: collection?.pipelineSettings },
     summary: summarizeBenchmark(results, errors),
     algorithmStats: summarizeAlgorithms(results),
+    weightPresetBenchmark: buildWeightPresetBenchmark(results),
     confusionMatrix: buildConfusionMatrix(results),
     errors,
     results
@@ -155,11 +163,13 @@ function buildBenchmarkReport({ startedAt, files, results, errors, collection })
 
 function summarizeBenchmark(results, errors) {
   const total = results.length;
+  const known = results.filter(item => item.expectedKnownInBase).length;
   const success = results.filter(item => item.success).length;
   const top3 = results.filter(item => item.top3).length;
   const top10 = results.filter(item => item.top10).length;
   return {
     total,
+    knownExpected: known,
     errors: errors.length,
     successTop1: success,
     successTop3: top3,
@@ -167,6 +177,9 @@ function summarizeBenchmark(results, errors) {
     top1Accuracy: percent(success, total),
     top3Accuracy: percent(top3, total),
     top10Accuracy: percent(top10, total),
+    knownTop1Accuracy: percent(success, known),
+    knownTop3Accuracy: percent(top3, known),
+    knownTop10Accuracy: percent(top10, known),
     noDetection: results.filter(item => !item.detectedItems).length,
     unknownExpected: results.filter(item => !item.expectedKnownInBase).length,
     failedTop1: total - success
@@ -187,7 +200,7 @@ function buildConfusionMatrix(results) {
   const map = new Map();
   for (const result of results) {
     if (result.success || !result.expectedReference || !result.bestReference) continue;
-    const key = `${result.expectedReference} -> ${result.bestReference}`;
+    const key = result.expectedReference + ' -> ' + result.bestReference;
     const current = map.get(key) || { expectedReference: result.expectedReference, bestReference: result.bestReference, count: 0, files: [] };
     current.count++;
     current.files.push(result.fileName);
@@ -233,7 +246,8 @@ function algorithmVerdict(delta) {
 }
 
 function referenceFromFilename(fileName) {
-  return fileName.replace(/\.[^.]+$/, '').trim();
+  const dot = fileName.lastIndexOf('.');
+  return (dot > 0 ? fileName.slice(0, dot) : fileName).trim();
 }
 
 function sameReference(a, b) {
@@ -257,14 +271,14 @@ function round(value) {
 
 function saveJsonFile(data, fileName) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
+  const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
+  link.setAttribute('href', objectUrl);
+  link.setAttribute('download', fileName);
   document.body.appendChild(link);
   link.click();
   link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
 function timestampForFile() {
@@ -286,7 +300,7 @@ function resetProgress(label) {
 function setProgress(percent, label, detail, className = '') {
   const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
   if (analysisProgress) analysisProgress.value = safePercent;
-  if (analysisPercent) analysisPercent.textContent = `${safePercent} %`;
+  if (analysisPercent) analysisPercent.textContent = safePercent + ' %';
   if (analysisStatus) analysisStatus.textContent = label;
   if (!analysisDetails || !detail) return;
   const item = document.createElement('li');
@@ -303,7 +317,7 @@ function setBenchmarkStatus(message) {
 function formatError(error) {
   if (error instanceof Error && error.message) return error.message;
   if (error?.message) return String(error.message);
-  if (error?.filename) return `${error.filename}:${error.lineno || '?'} - ${error.message || 'Erreur script'}`;
-  if (error?.type) return `Evenement ${error.type}`;
+  if (error?.filename) return error.filename + ':' + (error.lineno || '?') + ' - ' + (error.message || 'Erreur script');
+  if (error?.type) return 'Evenement ' + error.type;
   return String(error);
 }
