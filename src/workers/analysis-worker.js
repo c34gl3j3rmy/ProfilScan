@@ -5,7 +5,7 @@ import { getScaledImageData, buildGray, suppressTexture, blurGray, buildEdgeMask
 import { selectSectionCandidates } from './section-candidates.js';
 
 const DEFAULT_SETTINGS = {
-  image: { brightness: 0, contrast: 100, textureSuppression: 0 },
+  image: { brightness: 0, contrast: 100, blurRadius: 1, textureSuppression: 0 },
   detection: { edgeQuantile: 0.82, linkRadius: 5, minAreaRatio: 0.0007, mergeGapRatio: 0.045 },
   weights: { ratio: 25, radial: 22, hu: 20, fourier: 18, angle: 10, fill: 5 }
 };
@@ -18,10 +18,10 @@ self.onmessage = async event => {
   try {
     postProgress(10, 'Lecture de l image', `${imageBitmap.width} x ${imageBitmap.height} px`);
     const source = getScaledImageData(imageBitmap, 900);
-    postProgress(24, 'Pretraitement', `Luminosite ${activeSettings.image.brightness} / contraste ${activeSettings.image.contrast} % / texture ${activeSettings.image.textureSuppression}`);
+    postProgress(24, 'Pretraitement', `Luminosite ${activeSettings.image.brightness} / contraste ${activeSettings.image.contrast} % / flou ${activeSettings.image.blurRadius} px / texture ${activeSettings.image.textureSuppression}`);
     const gray = buildGray(source.imageData, activeSettings.image);
     const denoised = suppressTexture(gray, source.width, source.height, activeSettings.image.textureSuppression);
-    const blurred = blurGray(denoised, source.width, source.height);
+    const blurred = blurGray(denoised, source.width, source.height, activeSettings.image.blurRadius);
     postProgress(40, 'Detection des contours', `Seuil dynamique : ${Math.round(activeSettings.detection.edgeQuantile * 100)} %`);
     const edges = buildEdgeMask(blurred, source.width, source.height, activeSettings.detection.edgeQuantile);
     const edgePoints = sampleMaskPoints(edges, source.width, source.height, source.scale, 4500);
@@ -64,6 +64,7 @@ function mergeSettings(settings = {}) {
     image: {
       brightness: clampNumber(settings.image?.brightness, DEFAULT_SETTINGS.image.brightness, -100, 100),
       contrast: clampNumber(settings.image?.contrast, DEFAULT_SETTINGS.image.contrast, 0, 220),
+      blurRadius: Math.round(clampNumber(settings.image?.blurRadius, DEFAULT_SETTINGS.image.blurRadius, 0, 5)),
       textureSuppression: Math.round(clampNumber(settings.image?.textureSuppression, DEFAULT_SETTINGS.image.textureSuppression, 0, 6))
     },
     detection: {
