@@ -32,8 +32,10 @@ export function suppressTexture(gray, width, height, strength = 0) {
   return boxBlurGray(current, width, height, Math.min(6, radius));
 }
 
-export function blurGray(gray, width, height) {
-  return boxBlurGray(gray, width, height, 1);
+export function blurGray(gray, width, height, radius = 1) {
+  const safeRadius = Math.round(radius);
+  if (safeRadius <= 0) return gray;
+  return boxBlurGray(gray, width, height, Math.min(5, safeRadius));
 }
 
 function boxBlurGray(gray, width, height, radius) {
