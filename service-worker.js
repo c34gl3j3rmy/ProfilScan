@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.2.7';
+const CACHE_NAME = 'profilscan-v1.2.8';
 const ASSETS = [
   './',
   './index.html',
@@ -9,7 +9,9 @@ const ASSETS = [
   './src/app/auto-settings.js',
   './src/app/camera.js',
   './src/app/image-import.js',
+  './src/app/live-slider-preview.js',
   './src/app/pipeline-preview.js',
+  './src/app/preprocessing-live-settings.js',
   './src/app/render-results.js',
   './src/app/reset-app.js',
   './src/app/settings-reader.js',
@@ -29,11 +31,13 @@ const ASSETS = [
   './src/shape-engine/zernike.js',
   './src/workers/import-worker.js',
   './src/workers/analysis-worker.js',
-  './src/workers/section-candidates.js',
+  './src/workers/canny-edge.js',
+  './src/workers/connected-components.js',
   './src/workers/contour-tracer.js',
+  './src/workers/dark-regions.js',
   './src/workers/image-preprocessing.js',
   './src/workers/morphology.js',
-  './src/workers/connected-components.js'
+  './src/workers/section-candidates.js'
 ];
 
 self.addEventListener('install', event => {
