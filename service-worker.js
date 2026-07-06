@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.2.8';
+const CACHE_NAME = 'profilscan-v1.2.9';
 const ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const ASSETS = [
   './src/app/app.js',
   './src/app/app-main.js',
   './src/app/auto-settings.js',
+  './src/app/batch-benchmark.js',
   './src/app/camera.js',
   './src/app/image-import.js',
   './src/app/live-slider-preview.js',
@@ -37,6 +38,7 @@ const ASSETS = [
   './src/workers/dark-regions.js',
   './src/workers/image-preprocessing.js',
   './src/workers/morphology.js',
+  './src/workers/robust-segmentation.js',
   './src/workers/section-candidates.js'
 ];
 
