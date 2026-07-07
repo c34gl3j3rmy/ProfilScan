@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.4.1';
+const CACHE_NAME = 'profilscan-v1.4.2';
 const ASSETS = [
   './',
   './index.html',
@@ -20,6 +20,7 @@ const ASSETS = [
   './src/app/single-report-download.js',
   './src/import/dataprofils-importer.js',
   './src/storage/indexed-db.js',
+  './src/shape-engine/fingerprint-pipeline.js',
   './src/shape-engine/pipeline-settings.js',
   './src/shape-engine/signature-builder.js',
   './src/shape-engine/svg-raster-signature.js',
