@@ -1,6 +1,5 @@
+import { buildUnifiedDNA, buildUnifiedFingerprint } from '../shape-engine/fingerprint-pipeline.js';
 import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
-import { buildShapeDNA, buildShapeFingerprint } from '../shape-engine/signature-builder.js';
-import { buildRasterizedShapeFingerprint } from '../shape-engine/svg-raster-signature.js';
 
 export async function importDataprofilsText(text, onProgress = () => {}, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
@@ -37,11 +36,10 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
 
   for (let index = 0; index < validProfiles.length; index++) {
     const profile = validProfiles[index];
-    const rasterFingerprint = await tryBuildRasterizedFingerprint(profile, settings);
-    const fingerprint = rasterFingerprint || buildShapeFingerprint(profile, settings);
-    const dna = buildShapeDNA(profile, settings);
+    const fingerprint = await buildUnifiedFingerprint({ kind: 'profile', profile }, settings);
+    const dna = buildUnifiedDNA(profile, settings);
     enriched.push({ ...profile, fingerprint, dna: { ...dna, descriptors: fingerprint.descriptors, pipelineSettings: settings } });
-    if (rasterFingerprint) rasterizedCount++;
+    if (fingerprint.summary?.pipelineMode === 'svg-raster') rasterizedCount++;
     else rasterFallbackCount++;
 
     if (index % 10 === 0 || index === validProfiles.length - 1) {
@@ -68,15 +66,6 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
     },
     profiles: enriched
   };
-}
-
-async function tryBuildRasterizedFingerprint(profile, settings) {
-  try {
-    return await buildRasterizedShapeFingerprint(profile, settings);
-  } catch (error) {
-    console.warn('Rasterisation SVG ignoree', profile.reference, error);
-    return null;
-  }
 }
 
 function report(onProgress, percent, label, detail) {
