@@ -18,6 +18,16 @@ const DEFAULT_WEIGHTS = {
   advanced: 0.35
 };
 
+const DEFAULT_UI_WEIGHTS = {
+  ratio: 25,
+  radial: 22,
+  hu: 20,
+  fourier: 18,
+  angle: 10,
+  fill: 5,
+  minutiae: 12
+};
+
 const ADVANCED_WEIGHTS = {
   hausdorff: 0.30,
   shapeContext: 0.30,
@@ -205,7 +215,13 @@ function computeRatioGate(ratioScore) {
 function positiveWeight(weights, key) {
   const number = Number(weights?.[key]);
   if (Number.isFinite(number) && number > 0) return number;
+  if (isUiWeightSet(weights)) return DEFAULT_UI_WEIGHTS[key] || 0;
   return DEFAULT_WEIGHTS[key] || 0;
+}
+
+function isUiWeightSet(weights) {
+  if (!weights) return false;
+  return BASE_WEIGHT_KEYS.some(key => Number(weights?.[key]) > 1);
 }
 
 function emptyScore() {
