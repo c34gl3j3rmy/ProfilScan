@@ -1,8 +1,9 @@
-export const PIPELINE_VERSION = 'common-pipeline-v1';
+export const PIPELINE_VERSION = 'common-pipeline-v2';
 
 export const DEFAULT_PIPELINE_SETTINGS = Object.freeze({
   fillGridSize: 96,
   contourPointCount: 240,
+  sampleMaxSegmentLength: 0.8,
   radialBins: 64,
   fourierTerms: 16,
   angleBins: 16,
@@ -15,6 +16,7 @@ export function normalizePipelineSettings(settings = {}) {
     version: PIPELINE_VERSION,
     fillGridSize: clampInteger(settings.fillGridSize, DEFAULT_PIPELINE_SETTINGS.fillGridSize, 32, 256),
     contourPointCount: clampInteger(settings.contourPointCount, DEFAULT_PIPELINE_SETTINGS.contourPointCount, 80, 800),
+    sampleMaxSegmentLength: clampNumber(settings.sampleMaxSegmentLength, DEFAULT_PIPELINE_SETTINGS.sampleMaxSegmentLength, 0.1, 5),
     radialBins: clampInteger(settings.radialBins, DEFAULT_PIPELINE_SETTINGS.radialBins, 16, 128),
     fourierTerms: clampInteger(settings.fourierTerms, DEFAULT_PIPELINE_SETTINGS.fourierTerms, 4, 32),
     angleBins: clampInteger(settings.angleBins, DEFAULT_PIPELINE_SETTINGS.angleBins, 8, 64),
