@@ -1,5 +1,6 @@
 import { findTopMatches } from '../shape-engine/candidate-search.js';
 import { buildDetectedFingerprintFromPoints } from '../shape-engine/signature-builder.js';
+import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
 import { traceBoundary } from './contour-tracer.js';
 import { getScaledImageData, buildGray, suppressTexture, blurGray } from './image-preprocessing.js';
 import { buildRobustEdgeMask } from './robust-segmentation.js';
@@ -8,13 +9,14 @@ import { selectSectionCandidates } from './section-candidates.js';
 const DEFAULT_SETTINGS = {
   image: { brightness: 0, contrast: 100, blurRadius: 1, textureSuppression: 0 },
   detection: { edgeQuantile: 0.82, linkRadius: 5, minAreaRatio: 0.0007, mergeGapRatio: 0.045 },
-  weights: { ratio: 25, radial: 22, hu: 20, fourier: 18, angle: 10, fill: 5 }
+  weights: { ratio: 18, radial: 32, hu: 0, fourier: 8, angle: 28, fill: 4, minutiae: 10, localFeature: 14 },
+  pipelineSettings: null
 };
 
 self.onmessage = async event => {
   const { type, imageBitmap, collection, settings } = event.data;
   if (type !== 'analyze') return;
-  const activeSettings = mergeSettings(settings);
+  const activeSettings = mergeSettings(settings, collection);
 
   try {
     postProgress(10, 'Lecture de l image', `${imageBitmap.width} x ${imageBitmap.height} px`);
@@ -35,7 +37,7 @@ self.onmessage = async event => {
     const objects = selectSectionCandidates(components, source.width, source.height, activeSettings.detection)
       .map(object => scaleDetectedObject(object, source.scale));
     postProgress(88, 'Comparaison avec la base', `${objects.length} sections candidates`);
-    const items = objects.map(object => matchObject(object, collection, activeSettings.weights));
+    const items = objects.map(object => matchObject(object, collection, activeSettings));
     const debug = {
       edges: edgePoints,
       segmentation: segmentation.stats,
@@ -62,7 +64,7 @@ self.onmessage = async event => {
   }
 };
 
-function mergeSettings(settings = {}) {
+function mergeSettings(settings = {}, collection = null) {
   return {
     expectedReference: String(settings.expectedReference || '').trim(),
     image: {
@@ -80,11 +82,14 @@ function mergeSettings(settings = {}) {
     weights: {
       ratio: clampNumber(settings.weights?.ratio, DEFAULT_SETTINGS.weights.ratio, 0, 100),
       radial: clampNumber(settings.weights?.radial, DEFAULT_SETTINGS.weights.radial, 0, 100),
-      hu: clampNumber(settings.weights?.hu, DEFAULT_SETTINGS.weights.hu, 0, 100),
+      hu: 0,
       fourier: clampNumber(settings.weights?.fourier, DEFAULT_SETTINGS.weights.fourier, 0, 100),
       angle: clampNumber(settings.weights?.angle, DEFAULT_SETTINGS.weights.angle, 0, 100),
-      fill: clampNumber(settings.weights?.fill, DEFAULT_SETTINGS.weights.fill, 0, 100)
-    }
+      fill: clampNumber(settings.weights?.fill, DEFAULT_SETTINGS.weights.fill, 0, 100),
+      minutiae: clampNumber(settings.weights?.minutiae, DEFAULT_SETTINGS.weights.minutiae, 0, 100),
+      localFeature: clampNumber(settings.weights?.localFeature, DEFAULT_SETTINGS.weights.localFeature, 0, 100)
+    },
+    pipelineSettings: normalizePipelineSettings(settings.pipelineSettings || collection?.pipelineSettings || {})
   };
 }
 
@@ -195,9 +200,9 @@ function scaleDetectedObject(object, scale) {
   };
 }
 
-function matchObject(object, collection, weights) {
-  const detectedFingerprint = buildDetectedFingerprintFromPoints(object);
-  const topCandidates = findTopMatches(detectedFingerprint, collection, weights, 10);
+function matchObject(object, collection, settings) {
+  const detectedFingerprint = buildDetectedFingerprintFromPoints(object, settings.pipelineSettings);
+  const topCandidates = findTopMatches(detectedFingerprint, collection, settings.weights, 10);
   const best = topCandidates[0];
   return { reference: best?.reference || 'N/A', designation: best?.designation || 'Profil inconnu', score: best?.score || 0, scoreDetails: best?.scoreDetails || null, sectionScore: object.sectionScore || 0, topCandidates, boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height } };
 }
