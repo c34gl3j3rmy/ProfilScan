@@ -1,3 +1,4 @@
+import { buildLocalFeatureSignature } from './local-feature-signature.js';
 import { buildMinutiaeSignature } from './minutiae-signature.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
 
@@ -24,7 +25,7 @@ export function buildShapeDNA(profile, pipelineSettings = {}) {
   const normalizedPoints = normalizePoints(points);
 
   return {
-    version: '1.4',
+    version: '1.5',
     identity: {
       reference: profile.reference,
       designation: profile.designation,
@@ -85,12 +86,14 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   const settings = normalizePipelineSettings(pipelineSettings);
   const normalizedPoints = normalizePoints(points || []);
   const compactPoints = simplifyPoints(normalizedPoints, settings.simplifyEpsilon).slice(0, settings.contourPointCount);
+  const descriptorPoints = compactPoints.length ? compactPoints : normalizedPoints;
   const filledShape = buildFilledShape(normalizedPoints, settings.fillGridSize);
   const radial = buildRadialSignature(normalizedPoints, settings.radialBins);
   const angleHistogram = buildAngleHistogram(normalizedPoints, settings.angleBins);
   const hu = buildHuMoments(filledShape.points.length ? filledShape.points : normalizedPoints);
   const fourier = buildFourierDescriptor(normalizedPoints, settings.fourierTerms);
-  const minutiae = buildMinutiaeSignature(compactPoints.length ? compactPoints : normalizedPoints);
+  const minutiae = buildMinutiaeSignature(descriptorPoints);
+  const localFeature = buildLocalFeatureSignature(descriptorPoints);
   const effectiveFillRatio = filledShape.fillRatio || fillRatio;
   const values = [
     normalize(width, 200),
@@ -104,13 +107,13 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   ];
 
   return {
-    version: '1.7',
+    version: '1.8',
     reference,
     values,
     contour: {
       normalizedPoints: compactPoints
     },
-    descriptors: { radial, angleHistogram, hu, fourier, minutiae, points: compactPoints },
+    descriptors: { radial, angleHistogram, hu, fourier, minutiae, localFeature, points: compactPoints },
     pipelineSettings: settings,
     summary: {
       width,
