@@ -5,7 +5,7 @@ import { sampleSvgPathPolyline } from './svg-path-sampler.js';
 export async function buildRasterizedProfileFingerprintCore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const pathText = String(profile.svgPath || profile.paths || '').trim();
-  const outline = sampleSvgPathPolyline(pathText, { lineSteps: 8, arcMaxStep: Math.PI / 48 });
+  const outline = sampleSvgPathPolyline(pathText, { maxSegmentLength: settings.sampleMaxSegmentLength });
   const bounds = getBounds(outline);
   if (!pathText || !bounds || outline.length < 3) return null;
 
@@ -28,6 +28,7 @@ export async function buildRasterizedProfileFingerprintCore(profile, pipelineSet
   fingerprint.summary.rasterBlackPixels = countMask(mask);
   fingerprint.summary.rasterBoundaryPoints = points.length;
   fingerprint.summary.arcSampler = 'svg-path-sampler';
+  fingerprint.summary.sampleMaxSegmentLength = settings.sampleMaxSegmentLength;
   return fingerprint;
 }
 
