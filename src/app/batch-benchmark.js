@@ -30,7 +30,7 @@ const inputs = {
   weightFill: document.querySelector('#weightFillInput')
 };
 
-const ALGORITHM_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature', 'advanced', 'hausdorff', 'shapeContext', 'icp', 'ransac', 'zernike'];
+const ALGORITHM_KEYS = ['globalStage', 'localStage', 'baseStage', 'ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature', 'advanced', 'advancedRaw', 'ratioGate', 'localGate', 'hausdorff', 'shapeContext', 'icp', 'ransac', 'zernike'];
 let worker = null;
 
 benchmarkInput?.addEventListener('change', event => runBenchmark(event.target.files));
