@@ -36,7 +36,7 @@ export function renderResults(result) {
 }
 
 function renderItem(item) {
-  return `<strong>${item.reference}</strong><br>${item.designation}<br>${Math.round(item.score)} %${formatScoreDetails(item.scoreDetails)}${formatTopCandidates(item.topCandidates)}`;
+  return `<strong>${item.reference}</strong><br>${item.designation}<br>${Math.round(item.score)} %${formatUncertainty(item.topCandidates)}${formatScoreDetails(item.scoreDetails)}${formatTopCandidates(item.topCandidates)}`;
 }
 
 function renderAdvice(result, items, contours, closedCount) {
@@ -47,6 +47,7 @@ function renderAdvice(result, items, contours, closedCount) {
   const edgeDensity = edges.length / Math.max(1, result.width * result.height);
   const openCount = Math.max(0, contours.length - closedCount);
   const suggestions = [];
+  const uncertainCount = items.filter(item => hasCloseCandidates(item.topCandidates)).length;
 
   if (!items.length && !closedCount) {
     suggestions.push(['Aucun profil detecte', 'Baisse legerement le seuil contour, augmente le contraste, puis augmente Connexion contours si les traits restent coupes.', 'danger']);
@@ -62,6 +63,9 @@ function renderAdvice(result, items, contours, closedCount) {
   }
   if (items.length > 3) {
     suggestions.push(['Trop d objets detectes', 'Augmente Aire mini ou Fusion objets pour eviter les morceaux parasites.', 'warning']);
+  }
+  if (uncertainCount) {
+    suggestions.push(['Reconnaissance incertaine', `${uncertainCount} profil(s) ont plusieurs candidats tres proches. Controle le Top candidats avant validation.`, 'warning']);
   }
   if (!suggestions.length) {
     suggestions.push(['Segmentation exploitable', 'Tu peux maintenant ajuster les poids de matching ou indiquer le profil attendu pour comparer les scores.', 'ok']);
@@ -185,11 +189,39 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function formatUncertainty(candidates) {
+  const close = getCloseCandidates(candidates);
+  if (!close) return '';
+
+  return `<div class="uncertainty-card">
+    <strong>Resultat incertain</strong>
+    <span>${close.first.reference} et ${close.second.reference} sont separes de seulement ${close.gap.toFixed(2)} point(s).</span>
+    <small>Controle le Top candidats avant validation.</small>
+  </div>`;
+}
+
+function hasCloseCandidates(candidates) {
+  return Boolean(getCloseCandidates(candidates));
+}
+
+function getCloseCandidates(candidates) {
+  if (!Array.isArray(candidates) || candidates.length < 2) return null;
+  const [first, second] = candidates;
+  const firstScore = Number(first?.score);
+  const secondScore = Number(second?.score);
+  if (!Number.isFinite(firstScore) || !Number.isFinite(secondScore)) return null;
+
+  const gap = Math.abs(firstScore - secondScore);
+  if (firstScore < 75 || secondScore < 75 || gap > 1.5) return null;
+  return { first, second, gap };
+}
+
 function formatTopCandidates(candidates) {
   if (!Array.isArray(candidates) || candidates.length <= 1) return '';
   const rows = candidates.slice(0, 10).map((candidate, index) => {
     const details = candidate.scoreDetails?.subscores || {};
-    return `<tr><td>${index + 1}</td><td>${candidate.reference}</td><td>${Math.round(candidate.score)}%</td><td>R ${details.ratio ?? '-'} · Hu ${details.hu ?? '-'} · F ${details.fourier ?? '-'}</td></tr>`;
+    const closeClass = index < 2 && hasCloseCandidates(candidates) ? ' class="close-candidate"' : '';
+    return `<tr${closeClass}><td>${index + 1}</td><td>${candidate.reference}</td><td>${formatScoreValue(candidate.score)}</td><td>R ${details.ratio ?? '-'} · Hu ${details.hu ?? '-'} · F ${details.fourier ?? '-'}</td></tr>`;
   }).join('');
   return `<details class="score-details"><summary>Top candidats</summary><table><tbody>${rows}</tbody></table></details>`;
 }
@@ -203,6 +235,12 @@ function formatScoreDetails(details) {
 function scoreBar(label, value) {
   const safe = Math.max(0, Math.min(100, Number(value) || 0));
   return `<div class="score-bar"><span>${label}</span><meter min="0" max="100" value="${safe}"></meter><strong>${safe}%</strong></div>`;
+}
+
+function formatScoreValue(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return '-';
+  return `${score.toFixed(2)}%`;
 }
 
 function formatPercent(value) {
