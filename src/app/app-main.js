@@ -7,8 +7,8 @@ import { renderResults } from './render-results.js';
 import { bindRange, buildSettings } from './settings-reader.js';
 import { computeAutoImageSettings, applyAutoImageSettings } from './auto-settings.js';
 import { getCollection, saveCollection } from '../storage/indexed-db.js';
+import { buildUnifiedFingerprint } from '../shape-engine/fingerprint-pipeline.js';
 import { DEFAULT_PIPELINE_SETTINGS, normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
-import { buildRasterizedShapeFingerprint } from '../shape-engine/svg-raster-signature.js';
 
 const screens = {
   noBase: document.querySelector('#screenNoBase'),
@@ -338,6 +338,8 @@ function buildSignatureExport(profile, fingerprint = profile.fingerprint) {
       angleHistogram: roundArray(fingerprint?.descriptors?.angleHistogram),
       hu: roundArray(fingerprint?.descriptors?.hu),
       fourier: roundArray(fingerprint?.descriptors?.fourier),
+      minutiae: fingerprint?.descriptors?.minutiae || null,
+      localFeature: fingerprint?.descriptors?.localFeature || null,
       points: (fingerprint?.descriptors?.points || []).slice(0, 80)
     },
     dna: {
@@ -409,16 +411,16 @@ async function updatePipelinePreview() {
 
   pipelinePreviewStatus.textContent = `${profile.reference} - ${profile.designation || 'Sans designation'} · calcul de l'aperçu...`;
   try {
-    const fingerprint = await buildRasterizedShapeFingerprint(profile, settings);
+    const previewFingerprint = await buildUnifiedFingerprint({ kind: 'profile', profile }, settings);
     if (run !== pipelinePreviewRun) return;
-    const previewFingerprint = fingerprint || profile.fingerprint;
     renderPipelinePreview(pipelinePreviewCanvas, profile, previewFingerprint);
-    pipelinePreviewStatus.textContent = `${profile.reference} - ${profile.designation || 'Sans designation'} · ${previewFingerprint?.summary?.source || 'signature'} · grille ${settings.fillGridSize} x ${settings.fillGridSize}`;
+    const mode = previewFingerprint?.summary?.pipelineMode || previewFingerprint?.summary?.source || 'signature';
+    pipelinePreviewStatus.textContent = `${profile.reference} - ${profile.designation || 'Sans designation'} · ${mode} · grille ${settings.fillGridSize} x ${settings.fillGridSize}`;
     pipelinePreviewOutput.value = JSON.stringify(buildSignatureExport(profile, previewFingerprint), null, 2);
   } catch (error) {
     if (run !== pipelinePreviewRun) return;
     renderPipelinePreview(pipelinePreviewCanvas, profile, profile.fingerprint);
-    pipelinePreviewStatus.textContent = `${profile.reference} - aperçu raster indisponible : ${formatError(error)}`;
+    pipelinePreviewStatus.textContent = `${profile.reference} - aperçu pipeline indisponible : ${formatError(error)}`;
     pipelinePreviewOutput.value = JSON.stringify(buildSignatureExport(profile), null, 2);
   }
 }
@@ -496,7 +498,7 @@ function buildAlgorithmAudit(best, expectedCandidate, expectedProfile) {
   const rows = ALGORITHM_AUDIT_KEYS.map(key => {
     const bestScore = scoreValue(best, key);
     const expectedScore = scoreValue(expectedCandidate, key);
-    const delta = expectedFound ? expectedScore - bestScore : null;
+    const delta = expectedFound && Number.isFinite(expectedScore) && Number.isFinite(bestScore) ? expectedScore - bestScore : null;
     return {
       key,
       label: ALGORITHM_LABELS[key] || key,
@@ -525,13 +527,21 @@ function buildAlgorithmAudit(best, expectedCandidate, expectedProfile) {
 }
 
 const ALGORITHM_AUDIT_KEYS = [
+  'globalStage',
+  'localStage',
+  'baseStage',
   'ratio',
   'radial',
   'hu',
   'fourier',
   'angle',
   'fill',
+  'minutiae',
+  'localFeature',
   'advanced',
+  'advancedRaw',
+  'ratioGate',
+  'localGate',
   'hausdorff',
   'shapeContext',
   'icp',
@@ -540,13 +550,21 @@ const ALGORITHM_AUDIT_KEYS = [
 ];
 
 const ALGORITHM_LABELS = {
+  globalStage: 'Etape globale',
+  localStage: 'Etape locale',
+  baseStage: 'Fusion globale + locale',
   ratio: 'Ratio largeur/hauteur',
   radial: 'Signature radiale',
-  hu: 'Moments de Hu',
+  hu: 'Moments de Hu (diagnostic)',
   fourier: 'Descripteurs de Fourier',
   angle: 'Histogramme des angles',
   fill: 'Taux de remplissage',
-  advanced: 'Fusion avancee',
+  minutiae: 'Minuties',
+  localFeature: 'Signature locale',
+  advanced: 'Fusion avancee ponderee',
+  advancedRaw: 'Fusion avancee brute',
+  ratioGate: 'Garde-fou ratio',
+  localGate: 'Garde-fou local',
   hausdorff: 'Distance de Hausdorff',
   shapeContext: 'Shape Context',
   icp: 'ICP',
