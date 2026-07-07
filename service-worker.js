@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.4.0';
+const CACHE_NAME = 'profilscan-v1.4.1';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './src/app/app-main.js',
   './src/app/auto-settings.js',
   './src/app/batch-benchmark.js',
+  './src/app/benchmark-weight-presets.js',
   './src/app/camera.js',
   './src/app/image-import.js',
   './src/app/live-slider-preview.js',
@@ -16,6 +17,7 @@ const ASSETS = [
   './src/app/render-results.js',
   './src/app/reset-app.js',
   './src/app/settings-reader.js',
+  './src/app/single-report-download.js',
   './src/import/dataprofils-importer.js',
   './src/storage/indexed-db.js',
   './src/shape-engine/pipeline-settings.js',
