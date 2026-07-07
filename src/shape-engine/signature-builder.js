@@ -2,7 +2,7 @@ import { buildLocalFeatureSignature } from './local-feature-signature.js';
 import { buildMinutiaeSignature } from './minutiae-signature.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
 
-export function buildShapeFingerprint(profile, pipelineSettings = {}) {
+export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const points = sampleSvgPath(profile.svgPath || profile.paths || '');
   return buildFingerprint({
@@ -18,10 +18,10 @@ export function buildShapeFingerprint(profile, pipelineSettings = {}) {
   });
 }
 
-export function buildShapeDNA(profile, pipelineSettings = {}) {
+export function buildProfileDNACore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const points = sampleSvgPath(profile.svgPath || profile.paths || '');
-  const fingerprint = buildShapeFingerprint(profile, settings);
+  const fingerprint = buildProfileFingerprintCore(profile, settings);
   const normalizedPoints = normalizePoints(points);
 
   return {
@@ -58,14 +58,14 @@ export function buildShapeDNA(profile, pipelineSettings = {}) {
   };
 }
 
-export function buildDetectedFingerprintFromBox(object, pipelineSettings = {}) {
-  return buildDetectedFingerprintFromPoints({
+export function buildDetectedBoxFingerprintCore(object, pipelineSettings = {}) {
+  return buildDetectedFingerprintCore({
     ...object,
     points: rectanglePoints(object.width, object.height)
   }, pipelineSettings);
 }
 
-export function buildDetectedFingerprintFromPoints(object, pipelineSettings = {}) {
+export function buildDetectedFingerprintCore(object, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const ratio = object.width / object.height;
   return buildFingerprint({
