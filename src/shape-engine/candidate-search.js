@@ -39,7 +39,9 @@ const ADVANCED_WEIGHTS = {
   zernike: 0.15
 };
 
-const BASE_WEIGHT_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature'];
+const GLOBAL_WEIGHT_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill'];
+const LOCAL_WEIGHT_KEYS = ['minutiae', 'localFeature'];
+const BASE_WEIGHT_KEYS = [...GLOBAL_WEIGHT_KEYS, ...LOCAL_WEIGHT_KEYS];
 const REPORT_ONLY_KEYS = ['hu'];
 
 export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
@@ -73,17 +75,21 @@ function compareProfileDetailed(detected, profile, customWeights = null) {
   if (!advanced) return base;
 
   const ratioGate = computeRatioGate(base.subscores.ratio);
-  const advancedScore = advanced.score * ratioGate;
+  const localGate = computeLocalGate(base.subscores.localStage);
+  const advancedScore = advanced.score * ratioGate * localGate;
+  const baseStage = combineBaseStages(base.subscores.globalStage, base.subscores.localStage);
   const hierarchicalBoost = computeHierarchicalBoost(base.subscores, advanced.subscores);
-  const score = base.score * (1 - weights.advanced) + advancedScore * weights.advanced + hierarchicalBoost;
+  const score = baseStage * (1 - weights.advanced) + advancedScore * weights.advanced + hierarchicalBoost;
 
   return {
     score: clampScore(score),
     subscores: {
       ...base.subscores,
+      baseStage: Math.round(baseStage),
       advanced: Math.round(advancedScore),
       advancedRaw: Math.round(advanced.score),
       ratioGate: Math.round(ratioGate * 100),
+      localGate: Math.round(localGate * 100),
       hierarchicalBoost: Math.round(hierarchicalBoost),
       alignment: advanced.alignment,
       ...advanced.subscores
@@ -91,7 +97,12 @@ function compareProfileDetailed(detected, profile, customWeights = null) {
     weights: {
       ...base.weights,
       advanced: weights.advanced,
-      advancedDetails: advanced.weights
+      advancedDetails: advanced.weights,
+      hierarchy: {
+        globalStage: 0.62,
+        localStage: 0.38,
+        advancedGate: 'ratioGate * localGate'
+      }
     }
   };
 }
@@ -109,18 +120,16 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
   const minutiaeScore = compareMinutiaeSignatures(detected.descriptors?.minutiae, reference.descriptors?.minutiae);
   const localFeatureScore = compareLocalFeatures(detected, reference);
 
-  const score =
-    ratioScore * weights.ratio +
-    radial.score * weights.radial +
-    fourierScore * weights.fourier +
-    angle.score * weights.angle +
-    fillScore * weights.fill +
-    minutiaeScore * weights.minutiae +
-    localFeatureScore * weights.localFeature;
+  const globalStage = weightedAverage({ ratio: ratioScore, radial: radial.score, fourier: fourierScore, angle: angle.score, fill: fillScore }, weights, GLOBAL_WEIGHT_KEYS);
+  const localStage = weightedAverage({ minutiae: minutiaeScore, localFeature: localFeatureScore }, weights, LOCAL_WEIGHT_KEYS);
+  const baseStage = combineBaseStages(globalStage, localStage);
 
   return {
-    score: clampScore(score),
+    score: clampScore(baseStage),
     subscores: {
+      globalStage: Math.round(globalStage),
+      localStage: Math.round(localStage),
+      baseStage: Math.round(baseStage),
       ratio: Math.round(ratioScore),
       radial: Math.round(radial.score),
       radialShift: radial.shift,
@@ -174,15 +183,27 @@ function compareLocalFeatures(detected, reference) {
   return compareLocalFeatureSignatures(detectedSignature, referenceSignature);
 }
 
+function combineBaseStages(globalStage, localStage) {
+  return clampScore((Number(globalStage) || 0) * 0.62 + (Number(localStage) || 0) * 0.38);
+}
+
+function weightedAverage(scores, weights, keys) {
+  const total = keys.reduce((sum, key) => sum + Math.max(0, Number(weights?.[key]) || 0), 0);
+  if (total <= 0) return 0;
+  return keys.reduce((sum, key) => sum + (Number(scores[key]) || 0) * Math.max(0, Number(weights?.[key]) || 0), 0) / total;
+}
+
 function computeHierarchicalBoost(baseScores, advancedScores) {
   const local = Number(baseScores.localFeature) || 0;
+  const minutiae = Number(baseScores.minutiae) || 0;
   const radial = Number(baseScores.radial) || 0;
   const angle = Number(baseScores.angle) || 0;
   const hausdorff = Number(advancedScores.hausdorff) || 0;
   const icp = Number(advancedScores.icp) || 0;
-  const strongLocalAgreement = [local, radial, angle, hausdorff, icp].filter(value => value >= 88).length;
-  if (strongLocalAgreement >= 4) return 2.5;
-  if (strongLocalAgreement >= 3) return 1.2;
+  const strongLocalAgreement = [local, minutiae, radial, angle, hausdorff, icp].filter(value => value >= 88).length;
+  if (strongLocalAgreement >= 5) return 3;
+  if (strongLocalAgreement >= 4) return 1.8;
+  if (strongLocalAgreement >= 3) return 0.8;
   return 0;
 }
 
@@ -238,6 +259,14 @@ function computeRatioGate(ratioScore) {
   if (ratioScore >= 70) return 0.85;
   if (ratioScore >= 55) return 0.65;
   return 0.45;
+}
+
+function computeLocalGate(localStage) {
+  if (!Number.isFinite(localStage)) return 1;
+  if (localStage >= 82) return 1;
+  if (localStage >= 68) return 0.90;
+  if (localStage >= 55) return 0.72;
+  return 0.50;
 }
 
 function positiveWeight(weights, key) {
