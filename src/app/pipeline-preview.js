@@ -8,10 +8,10 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
   ctx.clearRect(0, 0, size, size);
   ctx.fillStyle = '#f9fafb';
   ctx.fillRect(0, 0, size, size);
-  drawGrid(ctx, size);
 
   const points = fingerprint?.descriptors?.points || fingerprint?.contour?.normalizedPoints || [];
   if (!points.length) {
+    drawGrid(ctx, size, 8);
     drawMessage(ctx, size, 'Aucun point signature');
     return;
   }
@@ -22,6 +22,35 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
     y: size / 2 - point.y * scale
   });
 
+  drawMaterialGrid(ctx, size, points, fingerprint?.pipelineSettings?.fillGridSize || fingerprint?.summary?.fillGridSize || 96);
+  drawGrid(ctx, size, visibleGridCount(fingerprint?.pipelineSettings?.fillGridSize || 96));
+  drawContour(ctx, points, toCanvas, size);
+  drawPoints(ctx, points, toCanvas, size);
+  drawCaption(ctx, size, profile, fingerprint);
+}
+
+function drawMaterialGrid(ctx, size, points, gridSize) {
+  const normalizedGridSize = clampGridSize(gridSize);
+  const cellSize = size / normalizedGridSize;
+  const step = 1 / normalizedGridSize;
+  const start = -0.5 + step / 2;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(37, 99, 235, 0.18)';
+
+  for (let yIndex = 0; yIndex < normalizedGridSize; yIndex++) {
+    const y = start + yIndex * step;
+    for (let xIndex = 0; xIndex < normalizedGridSize; xIndex++) {
+      const x = start + xIndex * step;
+      if (!isPointInsidePolygon(x, y, points)) continue;
+      ctx.fillRect(xIndex * cellSize, (normalizedGridSize - 1 - yIndex) * cellSize, Math.max(0.8, cellSize), Math.max(0.8, cellSize));
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawContour(ctx, points, toCanvas, size) {
   ctx.save();
   ctx.beginPath();
   points.forEach((point, index) => {
@@ -30,23 +59,19 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
     else ctx.lineTo(canvasPoint.x, canvasPoint.y);
   });
   ctx.closePath();
-  ctx.fillStyle = 'rgba(17, 24, 39, 0.16)';
-  ctx.fill();
   ctx.strokeStyle = '#111827';
   ctx.lineWidth = Math.max(1.5, size / 180);
   ctx.stroke();
   ctx.restore();
-
-  drawPoints(ctx, points, toCanvas, size);
-  drawCaption(ctx, size, profile, fingerprint);
 }
 
-function drawGrid(ctx, size) {
+function drawGrid(ctx, size, gridCount) {
   ctx.save();
-  ctx.strokeStyle = '#e5e7eb';
+  ctx.strokeStyle = 'rgba(107, 114, 128, 0.18)';
   ctx.lineWidth = 1;
-  const step = size / 8;
-  for (let i = 1; i < 8; i++) {
+  const count = Math.max(4, Math.min(64, Math.round(gridCount || 8)));
+  const step = size / count;
+  for (let i = 1; i < count; i++) {
     const position = i * step;
     ctx.beginPath();
     ctx.moveTo(position, 0);
@@ -56,6 +81,12 @@ function drawGrid(ctx, size) {
     ctx.stroke();
   }
   ctx.restore();
+}
+
+function visibleGridCount(fillGridSize) {
+  const value = clampGridSize(fillGridSize);
+  if (value <= 64) return value;
+  return 64;
 }
 
 function drawPoints(ctx, points, toCanvas, size) {
@@ -75,7 +106,9 @@ function drawPoints(ctx, points, toCanvas, size) {
 function drawCaption(ctx, size, profile, fingerprint) {
   ctx.save();
   const summary = fingerprint?.summary || {};
-  const text = `${profile?.reference || ''} · ${summary.huSource || 'signature'} · remplissage ${Math.round((summary.fillRatio || 0) * 1000) / 10}%`;
+  const gridSize = fingerprint?.pipelineSettings?.fillGridSize || summary.fillGridSize || '?';
+  const segment = summary.sampleMaxSegmentLength ? ` · pas ${summary.sampleMaxSegmentLength} mm` : '';
+  const text = `${profile?.reference || ''} · ${summary.huSource || 'signature'} · grille ${gridSize} · remplissage ${Math.round((summary.fillRatio || 0) * 1000) / 10}%${segment}`;
   ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
   ctx.fillRect(0, size - 30, size, 30);
   ctx.fillStyle = '#111827';
@@ -91,4 +124,24 @@ function drawMessage(ctx, size, message) {
   ctx.textAlign = 'center';
   ctx.fillText(message, size / 2, size / 2);
   ctx.restore();
+}
+
+function isPointInsidePolygon(x, y, points) {
+  let inside = false;
+  for (let index = 0, previousIndex = points.length - 1; index < points.length; previousIndex = index++) {
+    const point = points[index];
+    const previous = points[previousIndex];
+    const crosses = (point.y > y) !== (previous.y > y);
+    if (crosses) {
+      const atX = ((previous.x - point.x) * (y - point.y)) / ((previous.y - point.y) || 1e-12) + point.x;
+      if (x < atX) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function clampGridSize(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 96;
+  return Math.max(8, Math.min(256, Math.round(number)));
 }
