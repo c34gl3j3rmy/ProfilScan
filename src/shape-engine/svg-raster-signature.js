@@ -1,10 +1,11 @@
 import { buildDetectedFingerprintCore } from './signature-builder.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
+import { sampleSvgPathPolyline } from './svg-path-sampler.js';
 
 export async function buildRasterizedProfileFingerprintCore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const pathText = String(profile.svgPath || profile.paths || '').trim();
-  const outline = samplePathPolyline(pathText, true);
+  const outline = sampleSvgPathPolyline(pathText, { lineSteps: 8, arcMaxStep: Math.PI / 48 });
   const bounds = getBounds(outline);
   if (!pathText || !bounds || outline.length < 3) return null;
 
@@ -26,6 +27,7 @@ export async function buildRasterizedProfileFingerprintCore(profile, pipelineSet
   fingerprint.summary.rasterSize = rasterSize;
   fingerprint.summary.rasterBlackPixels = countMask(mask);
   fingerprint.summary.rasterBoundaryPoints = points.length;
+  fingerprint.summary.arcSampler = 'svg-path-sampler';
   return fingerprint;
 }
 
@@ -165,73 +167,6 @@ function getBounds(points) {
   }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity, width: 0, height: 0 });
 }
 
-function samplePathPolyline(pathText, densify) {
-  const tokens = String(pathText).match(/[AaHhLlMmVvZz]|[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g) || [];
-  const points = [];
-  let index = 0;
-  let command = '';
-  let current = { x: 0, y: 0 };
-  let start = { x: 0, y: 0 };
-
-  while (index < tokens.length) {
-    if (/^[A-Za-z]$/.test(tokens[index])) command = tokens[index++];
-    const upper = command.toUpperCase();
-    const relative = command !== upper;
-
-    if (upper === 'M') {
-      current = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      start = current;
-      points.push(current);
-      command = relative ? 'l' : 'L';
-      continue;
-    }
-    if (upper === 'L') {
-      const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushSegment(points, current, next, densify ? 8 : 1);
-      current = next;
-      continue;
-    }
-    if (upper === 'H') {
-      const x = readNumber(tokens, index++);
-      const next = { x: relative ? current.x + x : x, y: current.y };
-      pushSegment(points, current, next, densify ? 8 : 1);
-      current = next;
-      continue;
-    }
-    if (upper === 'V') {
-      const y = readNumber(tokens, index++);
-      const next = { x: current.x, y: relative ? current.y + y : y };
-      pushSegment(points, current, next, densify ? 8 : 1);
-      current = next;
-      continue;
-    }
-    if (upper === 'A') {
-      const rx = readNumber(tokens, index++);
-      const ry = readNumber(tokens, index++);
-      index += 3;
-      const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushSegment(points, current, next, densify ? Math.max(6, Math.ceil((Math.abs(rx) + Math.abs(ry)) / 2)) : 1);
-      current = next;
-      continue;
-    }
-    if (upper === 'Z') {
-      pushSegment(points, current, start, densify ? 8 : 1);
-      current = start;
-      command = '';
-      continue;
-    }
-    index++;
-  }
-  return points;
-}
-
-function pushSegment(points, from, to, steps) {
-  for (let index = 1; index <= steps; index++) {
-    const t = index / steps;
-    points.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t });
-  }
-}
-
 function isPointInsidePolygon(x, y, points) {
   let inside = false;
   for (let index = 0, previousIndex = points.length - 1; index < points.length; previousIndex = index++) {
@@ -244,13 +179,4 @@ function isPointInsidePolygon(x, y, points) {
     }
   }
   return inside;
-}
-
-function resolvePoint(x, y, current, relative) {
-  return relative ? { x: current.x + x, y: current.y + y } : { x, y };
-}
-
-function readNumber(tokens, index) {
-  const value = Number(tokens[index]);
-  return Number.isFinite(value) ? value : 0;
 }
