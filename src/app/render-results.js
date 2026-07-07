@@ -221,7 +221,7 @@ function formatTopCandidates(candidates) {
   const rows = candidates.slice(0, 10).map((candidate, index) => {
     const details = candidate.scoreDetails?.subscores || {};
     const closeClass = index < 2 && hasCloseCandidates(candidates) ? ' class="close-candidate"' : '';
-    return `<tr${closeClass}><td>${index + 1}</td><td>${candidate.reference}</td><td>${formatScoreValue(candidate.score)}</td><td>R ${details.ratio ?? '-'} · Hu ${details.hu ?? '-'} · F ${details.fourier ?? '-'}</td></tr>`;
+    return `<tr${closeClass}><td>${index + 1}</td><td>${candidate.reference}</td><td>${formatScoreValue(candidate.score)}</td><td>R ${details.ratio ?? '-'} · Hu ${details.hu ?? '-'} · F ${details.fourier ?? '-'} · M ${details.minutiae ?? '-'}</td></tr>`;
   }).join('');
   return `<details class="score-details"><summary>Top candidats</summary><table><tbody>${rows}</tbody></table></details>`;
 }
@@ -229,7 +229,7 @@ function formatTopCandidates(candidates) {
 function formatScoreDetails(details) {
   const scores = details?.subscores;
   if (!scores) return '';
-  return `<div class="score-details">${scoreBar('Ratio', scores.ratio)}${scoreBar('Radial', scores.radial)}${scoreBar('Hu', scores.hu)}${scoreBar('Fourier', scores.fourier)}${scoreBar('Angles', scores.angle)}${scoreBar('Remplissage', scores.fill)}${scoreBar('Avance', scores.advanced)}</div>`;
+  return `<div class="score-details">${scoreBar('Ratio', scores.ratio)}${scoreBar('Radial', scores.radial)}${scoreBar('Hu', scores.hu)}${scoreBar('Fourier', scores.fourier)}${scoreBar('Angles', scores.angle)}${scoreBar('Remplissage', scores.fill)}${scoreBar('Minuties', scores.minutiae)}${scoreBar('Avance', scores.advanced)}</div>`;
 }
 
 function scoreBar(label, value) {
