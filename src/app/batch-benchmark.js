@@ -3,6 +3,9 @@ import { computeAutoImageSettings, applyAutoImageSettings } from './auto-setting
 import { buildSettings } from './settings-reader.js';
 import { getCollection } from '../storage/indexed-db.js';
 import { buildWeightPresetBenchmark } from './benchmark-weight-presets.js';
+import { findTopMatches } from '../shape-engine/candidate-search.js';
+import { buildShapeFingerprint } from '../shape-engine/signature-builder.js';
+import { buildRasterizedShapeFingerprint } from '../shape-engine/svg-raster-signature.js';
 
 const benchmarkInput = document.querySelector('#benchmarkInput');
 const baseStatus = document.querySelector('#baseStatus');
@@ -27,13 +30,13 @@ const inputs = {
   weightFill: document.querySelector('#weightFillInput')
 };
 
-const ALGORITHM_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'advanced', 'hausdorff', 'shapeContext', 'icp', 'ransac', 'zernike'];
+const ALGORITHM_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature', 'advanced', 'hausdorff', 'shapeContext', 'icp', 'ransac', 'zernike'];
 let worker = null;
 
 benchmarkInput?.addEventListener('change', event => runBenchmark(event.target.files));
 
 async function runBenchmark(fileList) {
-  const files = Array.from(fileList || []).filter(isImageFile);
+  const files = Array.from(fileList || []).filter(isBenchmarkFile);
   benchmarkInput.value = '';
   if (!files.length) return;
 
@@ -54,13 +57,11 @@ async function runBenchmark(fileList) {
     const expectedReference = referenceFromFilename(file.name);
     setProgress(Math.round(index / files.length * 100), 'Benchmark lot', String(index + 1) + '/' + files.length + ' - ' + file.name + ' - attendu ' + expectedReference);
     try {
-      const imageBitmap = await loadImageFile(file);
-      const autoSettings = await computeAutoImageSettings(imageBitmap);
-      applyAutoImageSettings(inputs, autoSettings);
-      if (expectedProfileInput) expectedProfileInput.value = expectedReference;
       const settings = buildSettings(inputs);
-      const analysis = await analyzeBitmap(imageBitmap, collection, settings);
-      const result = summarizeImageResult(file, expectedReference, autoSettings, settings, analysis, collection);
+      if (expectedProfileInput) expectedProfileInput.value = expectedReference;
+      const result = isSvgFile(file)
+        ? await analyzeSvgBenchmarkFile(file, expectedReference, settings, collection)
+        : await analyzeRasterBenchmarkFile(file, expectedReference, settings, collection);
       results.push(result);
       setProgress(Math.round((index + 1) / files.length * 100), result.success ? 'Profil correct' : 'Profil incorrect', file.name + ' -> ' + (result.bestReference || 'aucun') + ' (' + Math.round(result.bestScore || 0) + '%)');
     } catch (error) {
@@ -77,8 +78,110 @@ async function runBenchmark(fileList) {
   setBenchmarkStatus('Benchmark termine : ' + report.summary.top1Accuracy + '% Top 1 - meilleur preset ' + (bestPreset?.top1Accuracy ?? '-') + '%');
 }
 
-function isImageFile(file) {
-  return /^image\//.test(file.type) || /\.(svg|jpg|jpeg|png|webp)$/i.test(file.name);
+async function analyzeRasterBenchmarkFile(file, expectedReference, settings, collection) {
+  const imageBitmap = await loadImageFile(file);
+  const autoSettings = await computeAutoImageSettings(imageBitmap);
+  applyAutoImageSettings(inputs, autoSettings);
+  const activeSettings = buildSettings(inputs);
+  const analysis = await analyzeBitmap(imageBitmap, collection, activeSettings);
+  return summarizeImageResult(file, expectedReference, autoSettings, activeSettings, analysis, collection);
+}
+
+async function analyzeSvgBenchmarkFile(file, expectedReference, settings, collection) {
+  const text = await file.text();
+  const profile = parseSvgProfile(text, expectedReference, collection);
+  const fingerprint = await buildSvgFingerprint(profile, settings);
+  const topCandidates = findTopMatches(fingerprint, collection, settings.weights, 10);
+  const best = topCandidates[0] || null;
+  const analysis = {
+    width: profile.width,
+    height: profile.height,
+    items: best ? [{
+      reference: best.reference,
+      designation: best.designation,
+      score: best.score,
+      scoreDetails: best.scoreDetails,
+      topCandidates,
+      boundingBox: { x: 0, y: 0, width: profile.width, height: profile.height }
+    }] : [],
+    debug: {
+      contours: [{ closed: true, points: fingerprint.descriptors?.points || [], holes: [] }],
+      segmentationMode: 'svg-vector-benchmark',
+      segmentation: { source: 'svg', pipeline: fingerprint.summary?.source || 'svg' }
+    }
+  };
+  return summarizeImageResult(file, expectedReference, { mode: 'svg-vector' }, settings, analysis, collection);
+}
+
+async function buildSvgFingerprint(profile, settings) {
+  try {
+    const rasterized = await buildRasterizedShapeFingerprint(profile, settings);
+    if (rasterized) return rasterized;
+  } catch (error) {
+    console.warn('Benchmark SVG raster ignore', profile.reference, error);
+  }
+  return buildShapeFingerprint(profile, settings);
+}
+
+function parseSvgProfile(text, expectedReference, collection) {
+  const expectedProfile = findProfile(collection, expectedReference);
+  const svgPath = extractSvgPath(text);
+  if (!svgPath) throw new Error('SVG sans chemin exploitable.');
+  const dimensions = extractSvgDimensions(text, expectedProfile);
+  return {
+    reference: expectedReference,
+    designation: expectedProfile?.designation || '',
+    width: dimensions.width,
+    height: dimensions.height,
+    ratio: dimensions.width / dimensions.height,
+    surface: expectedProfile?.surface || 0,
+    perimeter: expectedProfile?.perimeter || 0,
+    svgPath
+  };
+}
+
+function extractSvgPath(text) {
+  const paths = [...String(text).matchAll(/<path\b[^>]*\sd=["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
+  if (paths.length) return paths.join(' ');
+  const polylines = [...String(text).matchAll(/<(?:polyline|polygon)\b[^>]*\spoints=["']([^"']+)["'][^>]*>/gi)].map(match => pointsToPath(match[1]));
+  return polylines.filter(Boolean).join(' ');
+}
+
+function pointsToPath(pointsText) {
+  const numbers = String(pointsText).match(/[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g)?.map(Number) || [];
+  const pairs = [];
+  for (let index = 0; index < numbers.length - 1; index += 2) pairs.push([numbers[index], numbers[index + 1]]);
+  if (!pairs.length) return '';
+  return 'M ' + pairs.map(pair => pair.join(' ')).join(' L ') + ' Z';
+}
+
+function extractSvgDimensions(text, fallbackProfile) {
+  const viewBox = String(text).match(/viewBox=["']([^"']+)["']/i)?.[1]
+    ?.trim()
+    .split(/[\s,]+/)
+    .map(Number)
+    .filter(Number.isFinite);
+  if (viewBox?.length >= 4 && viewBox[2] > 0 && viewBox[3] > 0) return { width: viewBox[2], height: viewBox[3] };
+
+  const width = parseSvgLength(String(text).match(/<svg\b[^>]*\swidth=["']([^"']+)["']/i)?.[1]);
+  const height = parseSvgLength(String(text).match(/<svg\b[^>]*\sheight=["']([^"']+)["']/i)?.[1]);
+  if (width > 0 && height > 0) return { width, height };
+
+  if (fallbackProfile?.width > 0 && fallbackProfile?.height > 0) return { width: fallbackProfile.width, height: fallbackProfile.height };
+  return { width: 100, height: 100 };
+}
+
+function parseSvgLength(value) {
+  const number = Number(String(value || '').replace(',', '.').match(/[-+]?(?:\d*\.\d+|\d+)/)?.[0]);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function isBenchmarkFile(file) {
+  return isSvgFile(file) || /^image\//.test(file.type) || /\.(jpg|jpeg|png|webp|bmp)$/i.test(file.name);
+}
+
+function isSvgFile(file) {
+  return file?.type === 'image/svg+xml' || /\.svg$/i.test(file?.name || '');
 }
 
 function getWorker() {
@@ -147,15 +250,17 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
 function buildBenchmarkReport({ startedAt, files, results, errors, collection }) {
   return {
     type: 'ProfilScan batch benchmark report',
-    version: 'batch-benchmark-v2',
+    version: 'batch-benchmark-v3',
     startedAt,
     completedAt: new Date().toISOString(),
     input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension' },
     base: { name: collection?.name, profiles: collection?.profiles?.length, importedAt: collection?.importedAt, pipelineSettings: collection?.pipelineSettings },
     summary: summarizeBenchmark(results, errors),
+    failureSummary: summarizeFailures(results),
     algorithmStats: summarizeAlgorithms(results),
     weightPresetBenchmark: buildWeightPresetBenchmark(results),
     confusionMatrix: buildConfusionMatrix(results),
+    confusionFamilies: buildConfusionFamilies(results),
     errors,
     results
   };
@@ -186,6 +291,28 @@ function summarizeBenchmark(results, errors) {
   };
 }
 
+function summarizeFailures(results) {
+  const failed = results.filter(result => result.expectedKnownInBase && !result.success);
+  return {
+    outsideTop10: failed.filter(result => !result.top10).map(summarizeFailedProfile),
+    outsideTop3: failed.filter(result => !result.top3).map(summarizeFailedProfile),
+    top3ButNotTop1: failed.filter(result => result.top3).map(summarizeFailedProfile)
+  };
+}
+
+function summarizeFailedProfile(result) {
+  return {
+    fileName: result.fileName,
+    expectedReference: result.expectedReference,
+    bestReference: result.bestReference,
+    expectedRank: result.expectedRank,
+    bestScore: result.bestScore,
+    expectedScore: result.expectedCandidate?.score ?? null,
+    expectedWins: result.algorithmAudit?.expectedWins || [],
+    bestWins: result.algorithmAudit?.bestWins || []
+  };
+}
+
 function summarizeAlgorithms(results) {
   return ALGORITHM_KEYS.map(key => {
     const rows = results.map(result => result.algorithmAudit?.rows?.find(row => row.key === key)).filter(Boolean);
@@ -207,6 +334,26 @@ function buildConfusionMatrix(results) {
     map.set(key, current);
   }
   return Array.from(map.values()).sort((a, b) => b.count - a.count);
+}
+
+function buildConfusionFamilies(results) {
+  const map = new Map();
+  for (const result of results) {
+    if (result.success || !result.expectedReference || !result.bestReference) continue;
+    const expectedFamily = familyKey(result.expectedReference);
+    const bestFamily = familyKey(result.bestReference);
+    const key = expectedFamily + ' -> ' + bestFamily;
+    const current = map.get(key) || { expectedFamily, bestFamily, count: 0, examples: [] };
+    current.count++;
+    current.examples.push({ expectedReference: result.expectedReference, bestReference: result.bestReference, fileName: result.fileName });
+    map.set(key, current);
+  }
+  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+}
+
+function familyKey(reference) {
+  const value = String(reference || '').toUpperCase();
+  return value.match(/^[A-Z]+\d{0,2}/)?.[0] || value.match(/^\d{2,3}/)?.[0] || value.slice(0, 3);
 }
 
 function buildAlgorithmAudit(best, expectedCandidate) {
