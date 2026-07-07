@@ -1,10 +1,11 @@
 import { hausdorffScore } from './hausdorff.js';
-import { shapeContextScore } from './shape-context.js';
 import { icpScore } from './icp.js';
+import { compareMinutiaeSignatures } from './minutiae-signature.js';
 import { ransacLineScore } from './ransac.js';
-import { zernikeLikeScore } from './zernike.js';
 import { fuseScores } from './score-fusion.js';
 import { normalizePoints } from './shape-normalizer.js';
+import { shapeContextScore } from './shape-context.js';
+import { zernikeLikeScore } from './zernike.js';
 
 const DEFAULT_WEIGHTS = {
   ratio: 0.28,
@@ -13,6 +14,7 @@ const DEFAULT_WEIGHTS = {
   fourier: 0.16,
   angle: 0.08,
   fill: 0.04,
+  minutiae: 0.12,
   advanced: 0.35
 };
 
@@ -24,7 +26,7 @@ const ADVANCED_WEIGHTS = {
   zernike: 0.10
 };
 
-const BASE_WEIGHT_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill'];
+const BASE_WEIGHT_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'minutiae'];
 
 export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
   return findTopMatches(detectedFingerprint, collection, customWeights, 1)[0] || null;
@@ -88,6 +90,7 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
   const huScore = compareVectors(detected.descriptors?.hu, reference.descriptors?.hu, 20);
   const fourierScore = compareVectors(detected.descriptors?.fourier, reference.descriptors?.fourier, 1.4);
   const fillScore = compareFillRatio(detected.summary?.fillRatio ?? detected.fillRatio);
+  const minutiaeScore = compareMinutiaeSignatures(detected.descriptors?.minutiae, reference.descriptors?.minutiae);
 
   const score =
     ratioScore * weights.ratio +
@@ -95,7 +98,8 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
     huScore * weights.hu +
     fourierScore * weights.fourier +
     angle.score * weights.angle +
-    fillScore * weights.fill;
+    fillScore * weights.fill +
+    minutiaeScore * weights.minutiae;
 
   return {
     score: clampScore(score),
@@ -109,7 +113,8 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
       angle: Math.round(angle.score),
       angleShift: angle.shift,
       angleReversed: angle.reversed ? 1 : 0,
-      fill: Math.round(fillScore)
+      fill: Math.round(fillScore),
+      minutiae: Math.round(minutiaeScore)
     },
     weights
   };
@@ -169,7 +174,7 @@ function rotatePoint(point, degrees) {
 }
 
 function normalizeWeights(weights) {
-  const baseWeights = Object.fromEntries(BASE_WEIGHT_KEYS.map(key => [key, positiveNumber(weights?.[key])]));
+  const baseWeights = Object.fromEntries(BASE_WEIGHT_KEYS.map(key => [key, positiveWeight(weights, key)]));
   const baseTotal = Object.values(baseWeights).reduce((sum, value) => sum + value, 0);
   const fallbackTotal = BASE_WEIGHT_KEYS.reduce((sum, key) => sum + DEFAULT_WEIGHTS[key], 0);
 
@@ -197,9 +202,10 @@ function computeRatioGate(ratioScore) {
   return 0.45;
 }
 
-function positiveNumber(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : 0;
+function positiveWeight(weights, key) {
+  const number = Number(weights?.[key]);
+  if (Number.isFinite(number) && number > 0) return number;
+  return DEFAULT_WEIGHTS[key] || 0;
 }
 
 function emptyScore() {
