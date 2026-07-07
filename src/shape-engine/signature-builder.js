@@ -1,3 +1,4 @@
+import { buildMinutiaeSignature } from './minutiae-signature.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
 
 export function buildShapeFingerprint(profile, pipelineSettings = {}) {
@@ -89,6 +90,7 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   const angleHistogram = buildAngleHistogram(normalizedPoints, settings.angleBins);
   const hu = buildHuMoments(filledShape.points.length ? filledShape.points : normalizedPoints);
   const fourier = buildFourierDescriptor(normalizedPoints, settings.fourierTerms);
+  const minutiae = buildMinutiaeSignature(compactPoints.length ? compactPoints : normalizedPoints);
   const effectiveFillRatio = filledShape.fillRatio || fillRatio;
   const values = [
     normalize(width, 200),
@@ -102,13 +104,13 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   ];
 
   return {
-    version: '1.6',
+    version: '1.7',
     reference,
     values,
     contour: {
       normalizedPoints: compactPoints
     },
-    descriptors: { radial, angleHistogram, hu, fourier, points: compactPoints },
+    descriptors: { radial, angleHistogram, hu, fourier, minutiae, points: compactPoints },
     pipelineSettings: settings,
     summary: {
       width,
