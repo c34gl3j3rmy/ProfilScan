@@ -5,7 +5,7 @@ import { sampleSvgPathPolyline } from './svg-path-sampler.js';
 
 export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '');
+  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '', { maxSegmentLength: settings.sampleMaxSegmentLength });
   return buildFingerprint({
     reference: profile.reference,
     width: profile.width,
@@ -21,7 +21,7 @@ export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
 
 export function buildProfileDNACore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '');
+  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '', { maxSegmentLength: settings.sampleMaxSegmentLength });
   const fingerprint = buildProfileFingerprintCore(profile, settings);
   const normalizedPoints = normalizePoints(points);
 
@@ -127,7 +127,8 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       pointCount: normalizedPoints.length,
       source,
       huSource: filledShape.points.length ? settings.huSource : 'contour',
-      pipelineVersion: settings.version
+      pipelineVersion: settings.version,
+      sampleMaxSegmentLength: settings.sampleMaxSegmentLength
     }
   };
 }
