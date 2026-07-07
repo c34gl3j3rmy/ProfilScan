@@ -28,12 +28,14 @@ export function buildSettings(inputs) {
       mergeGapRatio: numberValue(inputs.mergeGap, 45) / 1000
     },
     weights: {
-      ratio: numberValue(inputs.weightRatio, 25),
-      radial: numberValue(inputs.weightRadial, 22),
-      hu: numberValue(inputs.weightHu, 20),
-      fourier: numberValue(inputs.weightFourier, 18),
-      angle: numberValue(inputs.weightAngle, 10),
-      fill: numberValue(inputs.weightFill, 5)
+      ratio: numberValue(inputs.weightRatio, 18),
+      radial: numberValue(inputs.weightRadial, 32),
+      hu: 0,
+      fourier: numberValue(inputs.weightFourier, 8),
+      angle: numberValue(inputs.weightAngle, 28),
+      fill: numberValue(inputs.weightFill, 4),
+      minutiae: 10,
+      localFeature: 14
     }
   };
 }
