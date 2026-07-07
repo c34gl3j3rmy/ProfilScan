@@ -1,7 +1,7 @@
 export function sampleSvgPathPolyline(pathText, options = {}) {
   const tokens = tokenizePath(pathText);
-  const lineSteps = Math.max(1, Math.round(options.lineSteps ?? 8));
-  const arcMaxStep = Number.isFinite(options.arcMaxStep) ? options.arcMaxStep : Math.PI / 32;
+  const maxSegmentLength = clampPositive(options.maxSegmentLength, 0.8);
+  const minSteps = Math.max(1, Math.round(options.minSteps ?? 1));
   const points = [];
   let index = 0;
   let command = '';
@@ -25,7 +25,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
 
     if (upper === 'L') {
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, lineSteps);
+      pushLine(points, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -33,7 +33,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     if (upper === 'H') {
       const x = readNumber(tokens, index++);
       const next = { x: relative ? current.x + x : x, y: current.y };
-      pushLine(points, current, next, lineSteps);
+      pushLine(points, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -41,7 +41,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     if (upper === 'V') {
       const y = readNumber(tokens, index++);
       const next = { x: current.x, y: relative ? current.y + y : y };
-      pushLine(points, current, next, lineSteps);
+      pushLine(points, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -53,7 +53,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
       const largeArcFlag = readNumber(tokens, index++);
       const sweepFlag = readNumber(tokens, index++);
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushArc(points, current, next, rx, ry, xAxisRotation, largeArcFlag, sweepFlag, arcMaxStep);
+      pushArc(points, current, next, rx, ry, xAxisRotation, largeArcFlag, sweepFlag, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -61,7 +61,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     if (upper === 'C') {
       index += 4;
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, lineSteps);
+      pushLine(points, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -69,20 +69,20 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     if (upper === 'S' || upper === 'Q') {
       index += 2;
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, lineSteps);
+      pushLine(points, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
 
     if (upper === 'T') {
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, lineSteps);
+      pushLine(points, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
 
     if (upper === 'Z') {
-      pushLine(points, current, start, lineSteps);
+      pushLine(points, current, start, maxSegmentLength, minSteps);
       current = start;
       command = '';
       continue;
@@ -111,26 +111,29 @@ function resolvePoint(x, y, current, relative) {
   return relative ? { x: current.x + x, y: current.y + y } : { x, y };
 }
 
-function pushLine(points, from, to, steps) {
+function pushLine(points, from, to, maxSegmentLength, minSteps) {
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
+  const steps = Math.max(minSteps, Math.ceil(distance / maxSegmentLength));
   for (let index = 1; index <= steps; index++) {
     const t = index / steps;
     points.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t });
   }
 }
 
-function pushArc(points, from, to, rx, ry, xAxisRotation, largeArcFlag, sweepFlag, maxStep) {
+function pushArc(points, from, to, rx, ry, xAxisRotation, largeArcFlag, sweepFlag, maxSegmentLength, minSteps) {
   if (!rx || !ry || samePoint(from, to)) {
-    pushLine(points, from, to, 1);
+    pushLine(points, from, to, maxSegmentLength, minSteps);
     return;
   }
 
   const params = endpointArcToCenter(from, to, Math.abs(rx), Math.abs(ry), xAxisRotation, Boolean(largeArcFlag), Boolean(sweepFlag));
   if (!params) {
-    pushLine(points, from, to, 1);
+    pushLine(points, from, to, maxSegmentLength, minSteps);
     return;
   }
 
-  const steps = Math.max(6, Math.ceil(Math.abs(params.deltaAngle) / maxStep));
+  const arcLength = estimateArcLength(params);
+  const steps = Math.max(6, minSteps, Math.ceil(arcLength / maxSegmentLength));
   const cosPhi = Math.cos(params.phi);
   const sinPhi = Math.sin(params.phi);
 
@@ -140,6 +143,28 @@ function pushArc(points, from, to, rx, ry, xAxisRotation, largeArcFlag, sweepFla
     const y = params.cy + params.rx * Math.cos(angle) * sinPhi + params.ry * Math.sin(angle) * cosPhi;
     points.push({ x, y });
   }
+}
+
+function estimateArcLength(params) {
+  const steps = Math.max(12, Math.ceil(Math.abs(params.deltaAngle) / (Math.PI / 24)));
+  let length = 0;
+  let previous = ellipsePoint(params, 0);
+  for (let index = 1; index <= steps; index++) {
+    const current = ellipsePoint(params, index / steps);
+    length += Math.hypot(current.x - previous.x, current.y - previous.y);
+    previous = current;
+  }
+  return length;
+}
+
+function ellipsePoint(params, t) {
+  const angle = params.startAngle + params.deltaAngle * t;
+  const cosPhi = Math.cos(params.phi);
+  const sinPhi = Math.sin(params.phi);
+  return {
+    x: params.cx + params.rx * Math.cos(angle) * cosPhi - params.ry * Math.sin(angle) * sinPhi,
+    y: params.cy + params.rx * Math.cos(angle) * sinPhi + params.ry * Math.sin(angle) * cosPhi
+  };
 }
 
 function endpointArcToCenter(from, to, rx, ry, rotationDegrees, largeArc, sweep) {
@@ -195,4 +220,9 @@ function vectorAngle(a, b) {
 
 function samePoint(a, b) {
   return Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9;
+}
+
+function clampPositive(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
 }
