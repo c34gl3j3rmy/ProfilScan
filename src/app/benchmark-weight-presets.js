@@ -1,43 +1,43 @@
 export const WEIGHT_PRESETS = [
   {
-    name: 'actuel-interface',
-    description: 'Poids historiques de l interface avant optimisation, avec minuties ajoutees par defaut',
-    base: { ratio: 25, radial: 22, hu: 20, fourier: 18, angle: 10, fill: 5, minutiae: 12 },
+    name: 'actuel-interface-sans-hu',
+    description: 'Poids interface historiques, mais Hu ignore dans le score et conserve seulement en audit',
+    base: { ratio: 25, radial: 22, fourier: 18, angle: 10, fill: 5, minutiae: 12, localFeature: 14 },
     advancedWeight: 0.35,
     advancedDetails: null
   },
   {
-    name: 'profilscan-v2',
-    description: 'Reglage issu du premier benchmark : Hu presque neutralise, radial/angles/Hausdorff/ICP renforces',
-    base: { ratio: 18, radial: 32, hu: 0, fourier: 8, angle: 28, fill: 4, minutiae: 10 },
+    name: 'profilscan-v3',
+    description: 'Hu neutralise, radial/angles/Hausdorff/ICP et signature locale renforces',
+    base: { ratio: 18, radial: 30, fourier: 8, angle: 26, fill: 4, minutiae: 10, localFeature: 14 },
     advancedWeight: 0.25,
-    advancedDetails: { hausdorff: 45, shapeContext: 15, icp: 30, ransac: 0, zernike: 10 }
+    advancedDetails: { hausdorff: 45, shapeContext: 10, icp: 30, ransac: 0, zernike: 15 }
   },
   {
-    name: 'faible-hu',
-    description: 'Conserve un faible poids Hu pour tester s il apporte encore un signal utile',
-    base: { ratio: 20, radial: 28, hu: 4, fourier: 12, angle: 24, fill: 4, minutiae: 8 },
-    advancedWeight: 0.25,
-    advancedDetails: { hausdorff: 45, shapeContext: 15, icp: 30, ransac: 0, zernike: 10 }
+    name: 'local-fort',
+    description: 'Met l accent sur les details locaux, crochets, gorges et zones discriminantes',
+    base: { ratio: 14, radial: 26, fourier: 6, angle: 24, fill: 3, minutiae: 12, localFeature: 20 },
+    advancedWeight: 0.30,
+    advancedDetails: { hausdorff: 42, shapeContext: 8, icp: 35, ransac: 0, zernike: 15 }
   },
   {
-    name: 'radial-angle-minuties',
-    description: 'Met l accent sur les signatures locales et les orientations',
-    base: { ratio: 16, radial: 30, hu: 0, fourier: 8, angle: 26, fill: 4, minutiae: 16 },
-    advancedWeight: 0.35,
-    advancedDetails: { hausdorff: 40, shapeContext: 20, icp: 30, ransac: 0, zernike: 10 }
+    name: 'radial-angle-local',
+    description: 'Compare surtout la signature radiale, les orientations et les details locaux',
+    base: { ratio: 16, radial: 34, fourier: 6, angle: 28, fill: 3, minutiae: 8, localFeature: 16 },
+    advancedWeight: 0.20,
+    advancedDetails: { hausdorff: 50, shapeContext: 5, icp: 35, ransac: 0, zernike: 10 }
   }
 ];
 
-const BASE_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'minutiae'];
+const BASE_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature'];
 const ADVANCED_KEYS = ['hausdorff', 'shapeContext', 'icp', 'ransac', 'zernike'];
-const SINGLE_BASE_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'minutiae'];
+const SINGLE_BASE_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature'];
 const SINGLE_ADVANCED_KEYS = ['advanced', ...ADVANCED_KEYS];
 
 export function buildWeightPresetBenchmark(results) {
   const singleAlgorithms = buildSingleAlgorithmBenchmark(results);
   const fixed = WEIGHT_PRESETS.map(preset => summarizePreset(results, preset, 'fixed'));
-  const optimized = buildOptimizedWeightBenchmark(results, 800);
+  const optimized = buildOptimizedWeightBenchmark(results, 900);
   return [...singleAlgorithms, ...fixed, ...optimized]
     .sort((a, b) => b.top1Accuracy - a.top1Accuracy || b.top3Accuracy - a.top3Accuracy || b.top10Accuracy - a.top10Accuracy);
 }
@@ -66,7 +66,7 @@ function buildOptimizedWeightBenchmark(results, maxCombinations) {
   const candidates = generateWeightCandidates(maxCombinations).map((preset, index) => summarizePreset(results, {
     ...preset,
     name: 'auto-' + String(index + 1).padStart(3, '0'),
-    description: 'Combinaison generee automatiquement par le benchmark'
+    description: 'Combinaison generee automatiquement par le benchmark sans Hu'
   }, 'auto'));
 
   const unique = [];
@@ -103,19 +103,19 @@ function buildBaseWeightCandidates() {
   const output = [];
   const ratios = [12, 18, 24, 30];
   const radials = [24, 30, 36, 42];
-  const hus = [0, 2, 5, 8];
-  const fouriers = [6, 10, 14, 18];
+  const fouriers = [4, 8, 12, 16];
   const angles = [18, 24, 30, 36];
   const minutiaes = [0, 8, 14, 20];
+  const localFeatures = [0, 10, 16, 24];
   const fill = 4;
 
   for (const ratio of ratios) {
     for (const radial of radials) {
-      for (const hu of hus) {
-        for (const fourier of fouriers) {
-          for (const angle of angles) {
-            for (const minutiae of minutiaes) {
-              output.push(normalizeBaseWeights({ ratio, radial, hu, fourier, angle, fill, minutiae }));
+      for (const fourier of fouriers) {
+        for (const angle of angles) {
+          for (const minutiae of minutiaes) {
+            for (const localFeature of localFeatures) {
+              output.push(normalizeBaseWeights({ ratio, radial, fourier, angle, fill, minutiae, localFeature }));
             }
           }
         }
@@ -128,9 +128,9 @@ function buildBaseWeightCandidates() {
 function buildAdvancedWeightCandidates() {
   const output = [];
   const hausdorffs = [35, 45, 55, 65];
-  const shapes = [5, 10, 15, 25];
+  const shapes = [5, 10, 15];
   const icps = [20, 30, 40, 50];
-  const ransacs = [0, 3, 6];
+  const ransacs = [0, 3];
   const zernikes = [5, 10, 15];
 
   for (const hausdorff of hausdorffs) {
@@ -149,13 +149,13 @@ function buildAdvancedWeightCandidates() {
 
 function normalizeBaseWeights(weights) {
   const total = sumValues(weights, BASE_KEYS);
-  if (total <= 0) return { ratio: 18, radial: 32, hu: 0, fourier: 8, angle: 28, fill: 4, minutiae: 10 };
+  if (total <= 0) return { ratio: 18, radial: 30, fourier: 8, angle: 26, fill: 4, minutiae: 10, localFeature: 14 };
   return Object.fromEntries(BASE_KEYS.map(key => [key, Math.round((weights[key] || 0) * 100 / total)]));
 }
 
 function normalizeAdvancedWeights(weights) {
   const total = sumValues(weights, ADVANCED_KEYS);
-  if (total <= 0) return { hausdorff: 45, shapeContext: 15, icp: 30, ransac: 0, zernike: 10 };
+  if (total <= 0) return { hausdorff: 45, shapeContext: 10, icp: 30, ransac: 0, zernike: 15 };
   return Object.fromEntries(ADVANCED_KEYS.map(key => [key, Math.round((weights[key] || 0) * 100 / total)]));
 }
 
