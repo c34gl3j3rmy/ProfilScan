@@ -1,5 +1,6 @@
 import { hausdorffScore } from './hausdorff.js';
 import { icpScore } from './icp.js';
+import { buildLocalFeatureSignature, compareLocalFeatureSignatures } from './local-feature-signature.js';
 import { compareMinutiaeSignatures } from './minutiae-signature.js';
 import { ransacLineScore } from './ransac.js';
 import { fuseScores } from './score-fusion.js';
@@ -8,35 +9,38 @@ import { shapeContextScore } from './shape-context.js';
 import { zernikeLikeScore } from './zernike.js';
 
 const DEFAULT_WEIGHTS = {
-  ratio: 0.28,
-  radial: 0.18,
-  hu: 0.16,
-  fourier: 0.16,
-  angle: 0.08,
-  fill: 0.04,
-  minutiae: 0.12,
-  advanced: 0.35
+  ratio: 0.24,
+  radial: 0.28,
+  hu: 0,
+  fourier: 0.10,
+  angle: 0.22,
+  fill: 0.03,
+  minutiae: 0.10,
+  localFeature: 0.13,
+  advanced: 0.25
 };
 
 const DEFAULT_UI_WEIGHTS = {
-  ratio: 25,
-  radial: 22,
-  hu: 20,
-  fourier: 18,
-  angle: 10,
-  fill: 5,
-  minutiae: 12
+  ratio: 18,
+  radial: 32,
+  hu: 0,
+  fourier: 8,
+  angle: 28,
+  fill: 4,
+  minutiae: 10,
+  localFeature: 14
 };
 
 const ADVANCED_WEIGHTS = {
-  hausdorff: 0.30,
-  shapeContext: 0.30,
-  icp: 0.25,
-  ransac: 0.05,
-  zernike: 0.10
+  hausdorff: 0.45,
+  shapeContext: 0.10,
+  icp: 0.30,
+  ransac: 0,
+  zernike: 0.15
 };
 
-const BASE_WEIGHT_KEYS = ['ratio', 'radial', 'hu', 'fourier', 'angle', 'fill', 'minutiae'];
+const BASE_WEIGHT_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature'];
+const REPORT_ONLY_KEYS = ['hu'];
 
 export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
   return findTopMatches(detectedFingerprint, collection, customWeights, 1)[0] || null;
@@ -70,7 +74,8 @@ function compareProfileDetailed(detected, profile, customWeights = null) {
 
   const ratioGate = computeRatioGate(base.subscores.ratio);
   const advancedScore = advanced.score * ratioGate;
-  const score = base.score * (1 - weights.advanced) + advancedScore * weights.advanced;
+  const hierarchicalBoost = computeHierarchicalBoost(base.subscores, advanced.subscores);
+  const score = base.score * (1 - weights.advanced) + advancedScore * weights.advanced + hierarchicalBoost;
 
   return {
     score: clampScore(score),
@@ -79,6 +84,7 @@ function compareProfileDetailed(detected, profile, customWeights = null) {
       advanced: Math.round(advancedScore),
       advancedRaw: Math.round(advanced.score),
       ratioGate: Math.round(ratioGate * 100),
+      hierarchicalBoost: Math.round(hierarchicalBoost),
       alignment: advanced.alignment,
       ...advanced.subscores
     },
@@ -101,15 +107,16 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
   const fourierScore = compareVectors(detected.descriptors?.fourier, reference.descriptors?.fourier, 1.4);
   const fillScore = compareFillRatio(detected.summary?.fillRatio ?? detected.fillRatio);
   const minutiaeScore = compareMinutiaeSignatures(detected.descriptors?.minutiae, reference.descriptors?.minutiae);
+  const localFeatureScore = compareLocalFeatures(detected, reference);
 
   const score =
     ratioScore * weights.ratio +
     radial.score * weights.radial +
-    huScore * weights.hu +
     fourierScore * weights.fourier +
     angle.score * weights.angle +
     fillScore * weights.fill +
-    minutiaeScore * weights.minutiae;
+    minutiaeScore * weights.minutiae +
+    localFeatureScore * weights.localFeature;
 
   return {
     score: clampScore(score),
@@ -119,14 +126,16 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
       radialShift: radial.shift,
       radialReversed: radial.reversed ? 1 : 0,
       hu: Math.round(huScore),
+      huIgnored: 1,
       fourier: Math.round(fourierScore),
       angle: Math.round(angle.score),
       angleShift: angle.shift,
       angleReversed: angle.reversed ? 1 : 0,
       fill: Math.round(fillScore),
-      minutiae: Math.round(minutiaeScore)
+      minutiae: Math.round(minutiaeScore),
+      localFeature: Math.round(localFeatureScore)
     },
-    weights
+    weights: { ...weights, hu: 0 }
   };
 }
 
@@ -157,6 +166,24 @@ function compareAdvancedScores(detected, profile) {
   }
 
   return best;
+}
+
+function compareLocalFeatures(detected, reference) {
+  const detectedSignature = detected.descriptors?.localFeature || buildLocalFeatureSignature(detected.descriptors?.points || detected.contour?.normalizedPoints || []);
+  const referenceSignature = reference.descriptors?.localFeature || buildLocalFeatureSignature(reference.descriptors?.points || reference.contour?.normalizedPoints || []);
+  return compareLocalFeatureSignatures(detectedSignature, referenceSignature);
+}
+
+function computeHierarchicalBoost(baseScores, advancedScores) {
+  const local = Number(baseScores.localFeature) || 0;
+  const radial = Number(baseScores.radial) || 0;
+  const angle = Number(baseScores.angle) || 0;
+  const hausdorff = Number(advancedScores.hausdorff) || 0;
+  const icp = Number(advancedScores.icp) || 0;
+  const strongLocalAgreement = [local, radial, angle, hausdorff, icp].filter(value => value >= 88).length;
+  if (strongLocalAgreement >= 4) return 2.5;
+  if (strongLocalAgreement >= 3) return 1.2;
+  return 0;
 }
 
 function buildAlignmentVariants(points) {
@@ -195,13 +222,14 @@ function normalizeWeights(weights) {
 
   return {
     ...normalizedBase,
+    hu: 0,
     advanced: clampUnit(Number.isFinite(Number(weights?.advanced)) ? Number(weights.advanced) : DEFAULT_WEIGHTS.advanced)
   };
 }
 
 function isNormalizedWeightSet(weights) {
   if (!weights) return false;
-  return BASE_WEIGHT_KEYS.every(key => Number.isFinite(weights[key])) && Number.isFinite(weights.advanced);
+  return BASE_WEIGHT_KEYS.every(key => Number.isFinite(weights[key])) && REPORT_ONLY_KEYS.every(key => Number.isFinite(weights[key])) && Number.isFinite(weights.advanced);
 }
 
 function computeRatioGate(ratioScore) {
@@ -221,7 +249,7 @@ function positiveWeight(weights, key) {
 
 function isUiWeightSet(weights) {
   if (!weights) return false;
-  return BASE_WEIGHT_KEYS.some(key => Number(weights?.[key]) > 1);
+  return [...BASE_WEIGHT_KEYS, ...REPORT_ONLY_KEYS].some(key => Number(weights?.[key]) > 1);
 }
 
 function emptyScore() {
