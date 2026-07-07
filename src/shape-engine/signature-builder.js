@@ -1,10 +1,11 @@
 import { buildLocalFeatureSignature } from './local-feature-signature.js';
 import { buildMinutiaeSignature } from './minutiae-signature.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
+import { sampleSvgPathPolyline } from './svg-path-sampler.js';
 
 export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  const points = sampleSvgPath(profile.svgPath || profile.paths || '');
+  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '');
   return buildFingerprint({
     reference: profile.reference,
     width: profile.width,
@@ -20,7 +21,7 @@ export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
 
 export function buildProfileDNACore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  const points = sampleSvgPath(profile.svgPath || profile.paths || '');
+  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '');
   const fingerprint = buildProfileFingerprintCore(profile, settings);
   const normalizedPoints = normalizePoints(points);
 
@@ -129,103 +130,6 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       pipelineVersion: settings.version
     }
   };
-}
-
-function sampleSvgPath(pathText) {
-  const tokens = tokenizePath(pathText);
-  const points = [];
-  let index = 0;
-  let command = '';
-  let current = { x: 0, y: 0 };
-  let start = { x: 0, y: 0 };
-
-  while (index < tokens.length) {
-    if (isCommand(tokens[index])) command = tokens[index++];
-    const upper = command.toUpperCase();
-    const relative = command !== upper;
-
-    if (upper === 'M') {
-      const x = readNumber(tokens, index++);
-      const y = readNumber(tokens, index++);
-      current = resolvePoint(x, y, current, relative);
-      start = current;
-      points.push(current);
-      command = relative ? 'l' : 'L';
-      continue;
-    }
-
-    if (upper === 'L') {
-      const x = readNumber(tokens, index++);
-      const y = readNumber(tokens, index++);
-      const next = resolvePoint(x, y, current, relative);
-      pushLine(points, current, next, 8);
-      current = next;
-      continue;
-    }
-
-    if (upper === 'H') {
-      const x = readNumber(tokens, index++);
-      const next = { x: relative ? current.x + x : x, y: current.y };
-      pushLine(points, current, next, 8);
-      current = next;
-      continue;
-    }
-
-    if (upper === 'V') {
-      const y = readNumber(tokens, index++);
-      const next = { x: current.x, y: relative ? current.y + y : y };
-      pushLine(points, current, next, 8);
-      current = next;
-      continue;
-    }
-
-    if (upper === 'A') {
-      const rx = readNumber(tokens, index++);
-      const ry = readNumber(tokens, index++);
-      index += 3;
-      const x = readNumber(tokens, index++);
-      const y = readNumber(tokens, index++);
-      const next = resolvePoint(x, y, current, relative);
-      pushLine(points, current, next, Math.max(6, Math.ceil((Math.abs(rx) + Math.abs(ry)) / 2)));
-      current = next;
-      continue;
-    }
-
-    if (upper === 'Z') {
-      pushLine(points, current, start, 8);
-      current = start;
-      command = '';
-      continue;
-    }
-
-    index++;
-  }
-
-  return points;
-}
-
-function tokenizePath(pathText) {
-  return String(pathText).match(/[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g) || [];
-}
-
-function isCommand(value) {
-  return /^[A-Za-z]$/.test(value);
-}
-
-function readNumber(tokens, index) {
-  const value = Number(tokens[index]);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function resolvePoint(x, y, current, relative) {
-  return relative ? { x: current.x + x, y: current.y + y } : { x, y };
-}
-
-function pushLine(points, a, b, steps) {
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
-    points.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-  }
 }
 
 function normalizePoints(points) {
