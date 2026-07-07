@@ -1,5 +1,5 @@
 import { findTopMatches } from '../shape-engine/candidate-search.js';
-import { buildDetectedFingerprintFromPoints } from '../shape-engine/signature-builder.js';
+import { buildUnifiedFingerprint } from '../shape-engine/fingerprint-pipeline.js';
 import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
 import { traceBoundary } from './contour-tracer.js';
 import { getScaledImageData, buildGray, suppressTexture, blurGray } from './image-preprocessing.js';
@@ -37,7 +37,7 @@ self.onmessage = async event => {
     const objects = selectSectionCandidates(components, source.width, source.height, activeSettings.detection)
       .map(object => scaleDetectedObject(object, source.scale));
     postProgress(88, 'Comparaison avec la base', `${objects.length} sections candidates`);
-    const items = objects.map(object => matchObject(object, collection, activeSettings));
+    const items = await Promise.all(objects.map(object => matchObject(object, collection, activeSettings)));
     const debug = {
       edges: edgePoints,
       segmentation: segmentation.stats,
@@ -200,8 +200,8 @@ function scaleDetectedObject(object, scale) {
   };
 }
 
-function matchObject(object, collection, settings) {
-  const detectedFingerprint = buildDetectedFingerprintFromPoints(object, settings.pipelineSettings);
+async function matchObject(object, collection, settings) {
+  const detectedFingerprint = await buildUnifiedFingerprint({ kind: 'detected', object }, settings.pipelineSettings);
   const topCandidates = findTopMatches(detectedFingerprint, collection, settings.weights, 10);
   const best = topCandidates[0];
   return { reference: best?.reference || 'N/A', designation: best?.designation || 'Profil inconnu', score: best?.score || 0, scoreDetails: best?.scoreDetails || null, sectionScore: object.sectionScore || 0, topCandidates, boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height } };
