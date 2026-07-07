@@ -1,7 +1,7 @@
-import { buildDetectedFingerprintFromPoints } from './signature-builder.js';
+import { buildDetectedFingerprintCore } from './signature-builder.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
 
-export async function buildRasterizedShapeFingerprint(profile, pipelineSettings = {}) {
+export async function buildRasterizedProfileFingerprintCore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const pathText = String(profile.svgPath || profile.paths || '').trim();
   const outline = samplePathPolyline(pathText, true);
@@ -13,7 +13,7 @@ export async function buildRasterizedShapeFingerprint(profile, pipelineSettings 
   const points = extractOrderedBoundaryPoints(mask, rasterSize, rasterSize, settings.contourPointCount);
   if (!points.length) return null;
 
-  const fingerprint = buildDetectedFingerprintFromPoints({
+  const fingerprint = buildDetectedFingerprintCore({
     width: profile.width,
     height: profile.height,
     area: profile.surface || countMask(mask),
