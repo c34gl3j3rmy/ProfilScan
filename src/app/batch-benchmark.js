@@ -4,8 +4,7 @@ import { buildSettings } from './settings-reader.js';
 import { getCollection } from '../storage/indexed-db.js';
 import { buildWeightPresetBenchmark } from './benchmark-weight-presets.js';
 import { findTopMatches } from '../shape-engine/candidate-search.js';
-import { buildShapeFingerprint } from '../shape-engine/signature-builder.js';
-import { buildRasterizedShapeFingerprint } from '../shape-engine/svg-raster-signature.js';
+import { buildUnifiedFingerprint } from '../shape-engine/fingerprint-pipeline.js';
 
 const benchmarkInput = document.querySelector('#benchmarkInput');
 const baseStatus = document.querySelector('#baseStatus');
@@ -90,7 +89,7 @@ async function analyzeRasterBenchmarkFile(file, expectedReference, settings, col
 async function analyzeSvgBenchmarkFile(file, expectedReference, settings, collection) {
   const text = await file.text();
   const profile = parseSvgProfile(text, expectedReference, collection);
-  const fingerprint = await buildSvgFingerprint(profile, settings);
+  const fingerprint = await buildUnifiedFingerprint({ kind: 'profile', profile }, settings.pipelineSettings || collection?.pipelineSettings || {});
   const topCandidates = findTopMatches(fingerprint, collection, settings.weights, 10);
   const best = topCandidates[0] || null;
   const analysis = {
@@ -106,21 +105,11 @@ async function analyzeSvgBenchmarkFile(file, expectedReference, settings, collec
     }] : [],
     debug: {
       contours: [{ closed: true, points: fingerprint.descriptors?.points || [], holes: [] }],
-      segmentationMode: 'svg-vector-benchmark',
-      segmentation: { source: 'svg', pipeline: fingerprint.summary?.source || 'svg' }
+      segmentationMode: 'svg-unified-benchmark',
+      segmentation: { source: 'svg', pipeline: fingerprint.summary?.pipelineMode || fingerprint.summary?.source || 'unified' }
     }
   };
-  return summarizeImageResult(file, expectedReference, { mode: 'svg-vector' }, settings, analysis, collection);
-}
-
-async function buildSvgFingerprint(profile, settings) {
-  try {
-    const rasterized = await buildRasterizedShapeFingerprint(profile, settings);
-    if (rasterized) return rasterized;
-  } catch (error) {
-    console.warn('Benchmark SVG raster ignore', profile.reference, error);
-  }
-  return buildShapeFingerprint(profile, settings);
+  return summarizeImageResult(file, expectedReference, { mode: 'svg-unified' }, settings, analysis, collection);
 }
 
 function parseSvgProfile(text, expectedReference, collection) {
