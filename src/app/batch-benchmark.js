@@ -122,6 +122,8 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
   const best = analysis.items?.[0] || null;
   const expectedProfile = findProfile(collection, expectedReference);
   const expectedCandidate = findExpectedCandidate(analysis, expectedReference);
+  const bestProfile = findProfile(collection, best?.reference);
+  const expectedCandidateProfile = findProfile(collection, expectedCandidate?.reference);
   const topCandidates = (best?.topCandidates || []).slice(0, 10).map((candidate, index) => ({
     rank: index + 1,
     reference: candidate.reference,
@@ -131,8 +133,12 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
   }));
   const expectedRank = topCandidates.find(candidate => sameReference(candidate.reference, expectedReference))?.rank || null;
   const success = sameReference(best?.reference, expectedReference);
+  const algorithmAudit = buildAlgorithmAudit(best, expectedCandidate);
+  const algorithmRanks = buildAlgorithmRanks(topCandidates, expectedReference, best?.reference);
+  const algorithmVotes = buildAlgorithmVotes(algorithmRanks, expectedReference, best?.reference);
+  const geometryDiagnostics = buildGeometryDiagnostics(expectedProfile, bestProfile, expectedCandidateProfile, best, expectedCandidate);
 
-  return {
+  const result = {
     fileName: file.name,
     expectedReference,
     expectedKnownInBase: Boolean(expectedProfile),
@@ -149,7 +155,7 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
     segmentationMode: analysis.debug?.segmentationMode || null,
     segmentation: summarizeSegmentation(analysis.debug?.segmentation),
     detectionDiagnostics: buildDetectionDiagnostics(analysis, autoSettings),
-    geometryDiagnostics: buildGeometryDiagnostics(expectedProfile, best, expectedCandidate),
+    geometryDiagnostics,
     autoSettings,
     settings,
     bestScoreDetails: best?.scoreDetails || null,
@@ -160,18 +166,21 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
       rank: expectedCandidate.rank,
       scoreDetails: expectedCandidate.scoreDetails
     } : null,
-    algorithmAudit: buildAlgorithmAudit(best, expectedCandidate),
-    algorithmRanks: buildAlgorithmRanks(topCandidates, expectedReference, best?.reference),
-    algorithmVotes: buildAlgorithmVotes(topCandidates, expectedReference, best?.reference),
+    algorithmAudit,
+    algorithmRanks,
+    algorithmVotes,
     topCandidates: summarizeTopCandidates(topCandidates)
   };
+
+  result.failureAnalysis = buildFailureAnalysis(result);
+  return result;
 }
 
 function buildBenchmarkReport({ startedAt, files, results, errors, collection }) {
   const failureSummary = summarizeFailures(results);
   return {
     type: 'ProfilScan batch benchmark summary report',
-    version: 'batch-benchmark-summary-v1',
+    version: 'batch-benchmark-summary-v2',
     startedAt,
     completedAt: new Date().toISOString(),
     input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension', svgMode: 'shared-rasterizer-before-analysis' },
@@ -181,6 +190,7 @@ function buildBenchmarkReport({ startedAt, files, results, errors, collection })
     failureSummary,
     algorithmEffectiveness: summarizeAlgorithmEffectiveness(results),
     algorithmVotes: summarizeGlobalAlgorithmVotes(results),
+    geometrySignals: summarizeGeometrySignals(results),
     weightPresetBenchmark: buildWeightPresetBenchmark(results),
     confusionMatrix: buildConfusionMatrix(results),
     confusionFamilies: buildConfusionFamilies(results),
@@ -229,7 +239,7 @@ function summarizeNoDetections(results) {
       segmentation: result.segmentation,
       detectionDiagnostics: result.detectionDiagnostics,
       expectedGeometry: result.geometryDiagnostics?.expected || null,
-      probableReason: guessFailureReason(result)
+      failureAnalysis: result.failureAnalysis
     }));
 }
 
@@ -258,7 +268,7 @@ function summarizeFailedProfile(result) {
     geometryDiagnostics: result.geometryDiagnostics,
     detectionDiagnostics: result.detectionDiagnostics,
     topCandidates: result.topCandidates,
-    probableReason: guessFailureReason(result)
+    failureAnalysis: result.failureAnalysis
   };
 }
 
@@ -301,28 +311,34 @@ function summarizeGlobalAlgorithmVotes(results) {
   });
 }
 
+function summarizeGeometrySignals(results) {
+  const failed = results.filter(result => result.expectedKnownInBase && !result.success && result.geometryDiagnostics?.deltas);
+  return {
+    samples: failed.length,
+    averageRatioDelta: average(failed.map(result => Math.abs(result.geometryDiagnostics.deltas.expectedVsBestRatio)).filter(Number.isFinite)),
+    averageCompactnessDelta: average(failed.map(result => Math.abs(result.geometryDiagnostics.deltas.expectedVsBestCompactness)).filter(Number.isFinite)),
+    averageFillRatioDelta: average(failed.map(result => Math.abs(result.geometryDiagnostics.deltas.expectedVsBestFillRatio)).filter(Number.isFinite)),
+    averageContourDensityDelta: average(failed.map(result => Math.abs(result.geometryDiagnostics.deltas.expectedVsBestContourDensity)).filter(Number.isFinite))
+  };
+}
+
 function buildAlgorithmRanks(topCandidates, expectedReference, bestReference) {
   return ALGORITHM_KEYS.map(key => {
     const ranked = topCandidates
       .map(candidate => ({ reference: candidate.reference, score: scoreValue(candidate, key) }))
       .filter(candidate => Number.isFinite(candidate.score))
       .sort((a, b) => b.score - a.score);
-    const expectedRank = ranked.findIndex(candidate => sameReference(candidate.reference, expectedReference)) + 1 || null;
-    const bestRank = ranked.findIndex(candidate => sameReference(candidate.reference, bestReference)) + 1 || null;
     return {
       key,
       winnerReference: ranked[0]?.reference || null,
-      winnerScore: ranked[0]?.score ?? null,
-      expectedRank,
-      bestRank,
-      expectedScore: ranked.find(candidate => sameReference(candidate.reference, expectedReference))?.score ?? null,
-      bestScore: ranked.find(candidate => sameReference(candidate.reference, bestReference))?.score ?? null
+      expectedRank: ranked.findIndex(candidate => sameReference(candidate.reference, expectedReference)) + 1 || null,
+      bestRank: ranked.findIndex(candidate => sameReference(candidate.reference, bestReference)) + 1 || null
     };
   });
 }
 
-function buildAlgorithmVotes(topCandidates, expectedReference, bestReference) {
-  const perAlgorithm = buildAlgorithmRanks(topCandidates, expectedReference, bestReference).map(row => ({
+function buildAlgorithmVotes(algorithmRanks, expectedReference, bestReference) {
+  const perAlgorithm = algorithmRanks.map(row => ({
     key: row.key,
     winnerReference: row.winnerReference,
     expectedRank: row.expectedRank,
@@ -346,10 +362,10 @@ function buildAlgorithmAudit(best, expectedCandidate) {
   return { expectedFound: Boolean(expectedCandidate), rows, expectedWins: rows.filter(row => Number(row.delta) > 0).map(row => row.key), bestWins: rows.filter(row => Number(row.delta) < 0).map(row => row.key) };
 }
 
-function buildGeometryDiagnostics(expectedProfile, best, expectedCandidate) {
+function buildGeometryDiagnostics(expectedProfile, bestProfile, expectedCandidateProfile, best, expectedCandidate) {
   const expected = buildProfileGeometry(expectedProfile);
-  const bestGeometry = buildCandidateGeometry(best);
-  const expectedCandidateGeometry = buildCandidateGeometry(expectedCandidate);
+  const bestGeometry = withScore(buildProfileGeometry(bestProfile), best?.score);
+  const expectedCandidateGeometry = withScore(buildProfileGeometry(expectedCandidateProfile), expectedCandidate?.score);
   return {
     expected,
     best: bestGeometry,
@@ -359,9 +375,14 @@ function buildGeometryDiagnostics(expectedProfile, best, expectedCandidate) {
       expectedVsBestCompactness: delta(expected?.compactness, bestGeometry?.compactness),
       expectedVsBestFillRatio: delta(expected?.fillRatio, bestGeometry?.fillRatio),
       expectedVsBestContourDensity: delta(expected?.contourDensity, bestGeometry?.contourDensity),
-      expectedVsExpectedCandidateScore: delta(best?.score, expectedCandidate?.score)
+      bestVsExpectedCandidateScore: delta(best?.score, expectedCandidate?.score)
     }
   };
+}
+
+function withScore(geometry, score) {
+  if (!geometry) return null;
+  return { ...geometry, score: round(score) };
 }
 
 function buildProfileGeometry(profile) {
@@ -372,6 +393,7 @@ function buildProfileGeometry(profile) {
   const perimeter = Number(profile.perimeter || profile.externalPerimeter || profile.totalPerimeter);
   const diagonal = Number(profile.profileDiagonal || Math.hypot(width || 0, height || 0));
   const fingerprint = profile.fingerprint || profile.dna;
+  const localComplexity = summarizeLocalComplexity(fingerprint);
   return {
     reference: profile.reference,
     width: round(width),
@@ -382,59 +404,21 @@ function buildProfileGeometry(profile) {
     compactness: round(area / ((width || 0) * (height || 0))),
     contourDensity: round(perimeter / (diagonal || 1)),
     fillRatio: round(fingerprint?.summary?.fillRatio),
-    symmetryX: round(symmetryScore(getFingerprintPoints(fingerprint), 'x')),
-    symmetryY: round(symmetryScore(getFingerprintPoints(fingerprint), 'y')),
-    localComplexity: summarizeLocalComplexity(fingerprint)
-  };
-}
-
-function buildCandidateGeometry(candidate) {
-  if (!candidate) return null;
-  const fingerprint = candidate.fingerprint || candidate.dna || candidate;
-  return {
-    reference: candidate.reference,
-    score: round(candidate.score),
-    ratio: round(candidate.summary?.ratio ?? candidate.dimensions?.ratio),
-    fillRatio: round(candidate.summary?.fillRatio),
-    compactness: round(candidate.summary?.surface && candidate.summary?.width && candidate.summary?.height ? candidate.summary.surface / (candidate.summary.width * candidate.summary.height) : null),
-    contourDensity: round(candidate.summary?.perimeter && candidate.summary?.width && candidate.summary?.height ? candidate.summary.perimeter / Math.hypot(candidate.summary.width, candidate.summary.height) : null),
-    symmetryX: round(symmetryScore(getFingerprintPoints(fingerprint), 'x')),
-    symmetryY: round(symmetryScore(getFingerprintPoints(fingerprint), 'y')),
-    localComplexity: summarizeLocalComplexity(fingerprint)
+    complexityScore: localComplexity.complexityScore,
+    complexityKind: localComplexity.complexityKind
   };
 }
 
 function summarizeLocalComplexity(fingerprint) {
   const minutiae = fingerprint?.subsignatures?.minutiae || fingerprint?.descriptors?.minutiae || fingerprint?.minutiae;
   const localFeature = fingerprint?.subsignatures?.localFeature || fingerprint?.descriptors?.localFeature || fingerprint?.localFeature;
-  return {
-    corners: numberOrNull(minutiae?.counts?.corners),
-    segments: numberOrNull(minutiae?.counts?.segments),
-    terminations: numberOrNull(minutiae?.counts?.terminations),
-    bifurcations: numberOrNull(minutiae?.counts?.bifurcations),
-    grooves: numberOrNull(localFeature?.features?.grooves),
-    hooks: numberOrNull(localFeature?.features?.hooks),
-    notches: numberOrNull(localFeature?.features?.notches),
-    lips: numberOrNull(localFeature?.features?.lips),
-    sharpTips: numberOrNull(localFeature?.features?.sharpTips),
-    longStraights: numberOrNull(localFeature?.features?.longStraights)
-  };
-}
-
-function getFingerprintPoints(fingerprint) {
-  return fingerprint?.descriptors?.points || fingerprint?.subsignatures?.points || fingerprint?.contour?.normalizedPoints || [];
-}
-
-function symmetryScore(points, axis) {
-  if (!Array.isArray(points) || points.length < 8) return null;
-  const sample = points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)).slice(0, 240);
-  if (sample.length < 8) return null;
-  const distances = sample.map(point => {
-    const mirror = axis === 'x' ? { x: -point.x, y: point.y } : { x: point.x, y: -point.y };
-    return Math.min(...sample.map(other => Math.hypot(other.x - mirror.x, other.y - mirror.y)));
-  });
-  const averageDistance = distances.reduce((sum, value) => sum + value, 0) / distances.length;
-  return clamp(100 * (1 - averageDistance / 0.35), 0, 100);
+  const corners = Number(minutiae?.counts?.corners) || 0;
+  const grooves = Number(localFeature?.features?.grooves) || 0;
+  const hooks = Number(localFeature?.features?.hooks) || 0;
+  const notches = Number(localFeature?.features?.notches) || 0;
+  const sharpTips = Number(localFeature?.features?.sharpTips) || 0;
+  const complexityScore = round(corners + grooves * 2 + hooks * 2 + notches * 1.5 + sharpTips * 2);
+  return { complexityScore, complexityKind: complexityScore >= 90 ? 'complex' : complexityScore >= 45 ? 'medium' : 'simple' };
 }
 
 function buildDetectionDiagnostics(analysis, autoSettings) {
@@ -449,6 +433,44 @@ function buildDetectionDiagnostics(analysis, autoSettings) {
     detectedItems: analysis.items?.length || 0,
     segmentationMode: analysis.debug?.segmentationMode || null
   };
+}
+
+function buildFailureAnalysis(result) {
+  if (!result.expectedKnownInBase) return { dominantReason: 'reference-absente', decisionHint: 'verifier-le-nom-du-fichier-ou-la-base', notes: ['La reference attendue est absente de la base importee.'] };
+  if (!result.detectedItems) return { dominantReason: 'no-detection', decisionHint: 'corriger-segmentation-ou-rasterisation', notes: ['Aucun contour exploitable detecte avant le matching.'] };
+  if (!result.expectedCandidate) return { dominantReason: 'expected-outside-top10', decisionHint: 'analyser-generation-signature-ou-filtrage-candidats', notes: ['Le bon profil ne figure pas dans le Top10, les deltas par algorithme ne sont donc pas calculables.'] };
+
+  const helpful = result.algorithmAudit?.rows?.filter(row => Number(row.delta) > 0).sort((a, b) => b.delta - a.delta).slice(0, 5).map(row => ({ key: row.key, delta: row.delta })) || [];
+  const harmful = result.algorithmAudit?.rows?.filter(row => Number(row.delta) < 0).sort((a, b) => a.delta - b.delta).slice(0, 5).map(row => ({ key: row.key, delta: row.delta })) || [];
+  const geometry = result.geometryDiagnostics?.deltas || {};
+  const notes = [];
+  if (Math.abs(geometry.expectedVsBestRatio || 0) > 0.25) notes.push('Ecart de ratio important entre attendu et Top1.');
+  if (Math.abs(geometry.expectedVsBestFillRatio || 0) > 0.12) notes.push('Ecart de remplissage important entre attendu et Top1.');
+  if (harmful.some(row => ['localFeature', 'minutiae', 'localStage'].includes(row.key))) notes.push('Les descripteurs locaux penalisent le bon profil.');
+  if (harmful.some(row => ['ratio', 'ratioGate'].includes(row.key))) notes.push('Le ratio ou son gate favorise le mauvais profil.');
+  if (familyKey(result.expectedReference) === familyKey(result.bestReference)) notes.push('Confusion dans la meme famille de profils.');
+
+  return {
+    dominantReason: guessFailureReason(result),
+    decisionHint: decisionHintFromReason(guessFailureReason(result)),
+    helpfulAlgorithms: helpful,
+    harmfulAlgorithms: harmful,
+    algorithmVoteCounts: result.algorithmVotes?.counts || {},
+    notes
+  };
+}
+
+function decisionHintFromReason(reason) {
+  const map = {
+    'reference-absente': 'verifier-la-base',
+    'no-detection': 'corriger-segmentation-ou-rasterisation',
+    'expected-outside-top10': 'ameliorer-candidate-search-ou-signature',
+    'ratio-conflict': 'reduire-ou-revoir-ratio-gate',
+    'local-confusion': 'reduire-ou-recalibrer-descripteurs-locaux',
+    'family-confusion': 'ajouter-discriminants-famille-proche',
+    'scoring-fusion-issue': 'revoir-ponderation-fusion'
+  };
+  return map[reason] || 'analyse-manuelle';
 }
 
 function summarizeSegmentation(segmentation) {
@@ -479,7 +501,7 @@ function buildDebugSamples(results) {
       expectedRank: result.expectedRank,
       bestScore: result.bestScore,
       expectedScore: result.expectedCandidate?.score ?? null,
-      algorithmAudit: result.algorithmAudit,
+      failureAnalysis: result.failureAnalysis,
       algorithmVotes: result.algorithmVotes,
       geometryDiagnostics: result.geometryDiagnostics,
       detectionDiagnostics: result.detectionDiagnostics,
