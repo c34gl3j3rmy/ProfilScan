@@ -1,4 +1,5 @@
 import { loadImageFile } from './image-import.js';
+import { isSvgFile, renderSvgFileToBitmap } from './svg-rasterizer.js';
 import { computeAutoImageSettings, applyAutoImageSettings } from './auto-settings.js';
 import { buildSettings } from './settings-reader.js';
 import { getCollection } from '../storage/indexed-db.js';
@@ -86,72 +87,17 @@ async function analyzeSvgBenchmarkFile(file, expectedReference, settings, collec
   return analyzeBitmapBenchmarkImage(file, expectedReference, imageBitmap, settings, collection, svgInfo);
 }
 
-async function analyzeBitmapBenchmarkImage(file, expectedReference, settingsImageBitmap, settings, collection, sourceInfo) {
-  const autoSettings = await computeAutoImageSettings(settingsImageBitmap);
+async function analyzeBitmapBenchmarkImage(file, expectedReference, imageBitmap, settings, collection, sourceInfo) {
+  const autoSettings = await computeAutoImageSettings(imageBitmap);
   applyAutoImageSettings(inputs, autoSettings);
   const activeSettings = buildSettings(inputs);
-  const analysis = await analyzeBitmap(settingsImageBitmap, collection, activeSettings);
+  const analysis = await analyzeBitmap(imageBitmap, collection, activeSettings);
   const mergedAutoSettings = sourceInfo ? { ...autoSettings, source: sourceInfo } : autoSettings;
   return summarizeImageResult(file, expectedReference, mergedAutoSettings, activeSettings, analysis, collection);
 }
 
-async function renderSvgFileToBitmap(file) {
-  const text = await file.text();
-  const { width, height } = extractSvgRasterSize(text);
-  const image = await loadSvgImage(text);
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-  ctx.drawImage(image, 0, 0, width, height);
-  return createImageBitmap(canvas);
-}
-
-function loadSvgImage(text) {
-  return new Promise((resolve, reject) => {
-    const blob = new Blob([text], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(image);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('SVG impossible a rasteriser.'));
-    };
-    image.src = url;
-  });
-}
-
-function extractSvgRasterSize(text) {
-  const viewBox = String(text).match(/viewBox=["']([^"']+)["']/i)?.[1]
-    ?.trim()
-    .split(/[\s,]+/)
-    .map(Number)
-    .filter(Number.isFinite);
-  const width = viewBox?.length >= 4 && viewBox[2] > 0 ? viewBox[2] : parseSvgLength(String(text).match(/<svg\b[^>]*\swidth=["']([^"']+)["']/i)?.[1]) || 100;
-  const height = viewBox?.length >= 4 && viewBox[3] > 0 ? viewBox[3] : parseSvgLength(String(text).match(/<svg\b[^>]*\sheight=["']([^"']+)["']/i)?.[1]) || 100;
-  const scale = Math.min(8, Math.max(3, 900 / Math.max(width, height)));
-  return {
-    width: Math.max(64, Math.round(width * scale)),
-    height: Math.max(64, Math.round(height * scale))
-  };
-}
-
-function parseSvgLength(value) {
-  const number = Number(String(value || '').replace(',', '.').match(/[-+]?(?:\d*\.\d+|\d+)/)?.[0]);
-  return Number.isFinite(number) ? number : 0;
-}
-
 function isBenchmarkFile(file) {
   return isSvgFile(file) || /^image\//.test(file.type) || /\.(jpg|jpeg|png|webp|bmp)$/i.test(file.name);
-}
-
-function isSvgFile(file) {
-  return file?.type === 'image/svg+xml' || /\.svg$/i.test(file?.name || '');
 }
 
 function getWorker() {
@@ -220,10 +166,10 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
 function buildBenchmarkReport({ startedAt, files, results, errors, collection }) {
   return {
     type: 'ProfilScan batch benchmark report',
-    version: 'batch-benchmark-v4',
+    version: 'batch-benchmark-v5',
     startedAt,
     completedAt: new Date().toISOString(),
-    input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension', svgMode: 'rasterized-before-analysis' },
+    input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension', svgMode: 'shared-rasterizer-before-analysis' },
     base: { name: collection?.name, profiles: collection?.profiles?.length, importedAt: collection?.importedAt, pipelineSettings: collection?.pipelineSettings },
     summary: summarizeBenchmark(results, errors),
     failureSummary: summarizeFailures(results),
