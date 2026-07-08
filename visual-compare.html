@@ -23,6 +23,7 @@
     canvas { width: 100%; max-height: 520px; object-fit: contain; background: white; border: 1px solid #cbd5df; border-radius: 10px; image-rendering: auto; }
     table { width: 100%; border-collapse: collapse; font-size: .92rem; }
     th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 7px 6px; vertical-align: top; }
+    code { background: rgba(148, 163, 184, .18); border-radius: 6px; padding: 1px 5px; }
     .warn { color: #9a3412; font-weight: 700; }
     .ok { color: #166534; font-weight: 700; }
     .badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-weight: 700; font-size: .82rem; }
@@ -106,6 +107,13 @@
           <canvas id="normalizedDiffCanvas" width="384" height="384"></canvas>
         </article>
       </div>
+    </section>
+
+    <section class="card panel">
+      <h2>Diagnostic signatures et matching</h2>
+      <p>Cette zone est alimentée par le même <code>analysis-worker</code> que la reconnaissance normale. Elle affiche le Top10, le rang du profil attendu, les sous-scores disponibles et le résumé de signature stockée dans la base.</p>
+      <table id="signatureStats"></table>
+      <p>Lecture rapide : si les bitmaps sont proches mais que le rang attendu n'est pas 1, le problème se situe probablement dans la signature, le candidate-search, les pondérations ou un profil jumeau.</p>
     </section>
   </main>
   <script type="module" src="./src/app/visual-compare.js"></script>
