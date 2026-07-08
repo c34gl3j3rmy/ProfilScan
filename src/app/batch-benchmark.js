@@ -70,9 +70,9 @@ async function runBenchmark(fileList) {
 
   const report = buildBenchmarkReport({ startedAt, files, results, errors, collection });
   saveJsonFile(report, 'profilscan-benchmark-summary-' + timestampForFile() + '.json');
-  const bestPreset = report.weightPresetBenchmark && report.weightPresetBenchmark[0];
+  const bestPreset = report.weightPresetBenchmark?.[0];
   const bestText = bestPreset ? ' - meilleur preset ' + bestPreset.name + ' : ' + bestPreset.top1Accuracy + '% Top 1' : '';
-  setProgress(100, 'Benchmark termine', results.length + ' images analysees - ' + report.summary.top1Accuracy + '% Top 1 - ' + report.summary.top3Accuracy + '% Top 3' + bestText + ' - rapport leger genere', 'done');
+  setProgress(100, 'Benchmark termine', results.length + ' images analysees - ' + report.summary.top1Accuracy + '% Top 1 - ' + report.summary.top3Accuracy + '% Top 3' + bestText + ' - rapport optimise ChatGPT genere', 'done');
   setBenchmarkStatus('Benchmark termine : ' + report.summary.top1Accuracy + '% Top 1 - meilleur preset ' + (bestPreset?.top1Accuracy ?? '-') + '%');
 }
 
@@ -158,7 +158,6 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
     geometryDiagnostics,
     autoSettings,
     settings,
-    bestScoreDetails: best?.scoreDetails || null,
     expectedCandidate: expectedCandidate ? {
       reference: expectedCandidate.reference,
       designation: expectedCandidate.designation,
@@ -172,30 +171,65 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
     topCandidates: summarizeTopCandidates(topCandidates)
   };
 
+  result.candidateSearchDiagnostics = buildCandidateSearchDiagnostics(result);
   result.failureAnalysis = buildFailureAnalysis(result);
   return result;
 }
 
 function buildBenchmarkReport({ startedAt, files, results, errors, collection }) {
+  const summary = summarizeBenchmark(results, errors);
+  const noDetectionDetails = summarizeNoDetections(results);
   const failureSummary = summarizeFailures(results);
+  const algorithmEffectiveness = summarizeAlgorithmEffectiveness(results);
+  const algorithmVotes = summarizeGlobalAlgorithmVotes(results);
+  const weightPresetBenchmark = summarizeWeightPresetBenchmark(buildWeightPresetBenchmark(results));
+  const confusionMatrix = buildConfusionMatrix(results);
+  const confusionFamilies = buildConfusionFamilies(results);
+  const candidateSearchDiagnostics = summarizeCandidateSearchDiagnostics(results);
+  const actionableRecommendations = buildActionableRecommendations({ summary, noDetectionDetails, failureSummary, algorithmEffectiveness, confusionFamilies, candidateSearchDiagnostics });
+  const executiveSummary = buildExecutiveSummary({ summary, noDetectionDetails, failureSummary, algorithmEffectiveness, confusionFamilies, actionableRecommendations });
+
   return {
-    type: 'ProfilScan batch benchmark summary report',
-    version: 'batch-benchmark-summary-v2',
+    type: 'ProfilScan batch benchmark ChatGPT optimized report',
+    version: 'batch-benchmark-chatgpt-v1',
     startedAt,
     completedAt: new Date().toISOString(),
     input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension', svgMode: 'shared-rasterizer-before-analysis' },
     base: { name: collection?.name, profiles: collection?.profiles?.length, importedAt: collection?.importedAt, pipelineSettings: collection?.pipelineSettings },
-    summary: summarizeBenchmark(results, errors),
-    noDetectionDetails: summarizeNoDetections(results),
+    executiveSummary,
+    summary,
+    priorityFailures: buildPriorityFailures(results),
+    noDetectionDetails,
+    candidateSearchDiagnostics,
     failureSummary,
-    algorithmEffectiveness: summarizeAlgorithmEffectiveness(results),
-    algorithmVotes: summarizeGlobalAlgorithmVotes(results),
+    algorithmEffectiveness,
+    algorithmVotes,
     geometrySignals: summarizeGeometrySignals(results),
-    weightPresetBenchmark: buildWeightPresetBenchmark(results),
-    confusionMatrix: buildConfusionMatrix(results),
-    confusionFamilies: buildConfusionFamilies(results),
-    debugSamples: buildDebugSamples(results),
+    weightPresetBenchmark,
+    confusionMatrix,
+    confusionFamilies,
+    actionableRecommendations,
+    reportForChatGPT: buildReportForChatGPT({ summary, noDetectionDetails, failureSummary, candidateSearchDiagnostics, algorithmEffectiveness, confusionFamilies, actionableRecommendations }),
     errors
+  };
+}
+
+function buildExecutiveSummary({ summary, noDetectionDetails, failureSummary, algorithmEffectiveness, confusionFamilies, actionableRecommendations }) {
+  const outsideTop10 = failureSummary.outsideTop10.length;
+  const top3ButNotTop1 = failureSummary.top3ButNotTop1.length;
+  const bestAlgorithms = algorithmEffectiveness.filter(item => item.recommendation === 'increase').slice(0, 5).map(item => item.key);
+  const weakAlgorithms = algorithmEffectiveness.filter(item => ['reduce', 'disable'].includes(item.recommendation)).slice(0, 5).map(item => item.key);
+  return {
+    verdict: summary.failedTop1 === 0 ? 'excellent' : noDetectionDetails.length ? 'pipeline-and-scoring-to-check' : outsideTop10 ? 'candidate-search-to-improve' : 'scoring-to-tune',
+    top1Accuracy: summary.top1Accuracy,
+    failedTop1: summary.failedTop1,
+    noDetection: noDetectionDetails.length,
+    outsideTop10,
+    top3ButNotTop1,
+    mainConfusions: confusionFamilies.slice(0, 5),
+    bestAlgorithms,
+    weakAlgorithms,
+    priorityActions: actionableRecommendations.slice(0, 5)
   };
 }
 
@@ -232,11 +266,9 @@ function summarizeNoDetections(results) {
       expectedReference: result.expectedReference,
       expectedKnownInBase: result.expectedKnownInBase,
       source: result.autoSettings?.source || null,
-      autoSettings: pickAutoSettings(result.autoSettings),
       contours: result.contours,
       holes: result.holes,
       segmentationMode: result.segmentationMode,
-      segmentation: result.segmentation,
       detectionDiagnostics: result.detectionDiagnostics,
       expectedGeometry: result.geometryDiagnostics?.expected || null,
       failureAnalysis: result.failureAnalysis
@@ -247,7 +279,6 @@ function summarizeFailures(results) {
   const failed = results.filter(result => result.expectedKnownInBase && !result.success);
   return {
     outsideTop10: failed.filter(result => !result.top10).map(summarizeFailedProfile),
-    outsideTop3: failed.filter(result => !result.top3).map(summarizeFailedProfile),
     top3ButNotTop1: failed.filter(result => result.top3).map(summarizeFailedProfile)
   };
 }
@@ -261,20 +292,47 @@ function summarizeFailedProfile(result) {
     bestScore: result.bestScore,
     expectedScore: result.expectedCandidate?.score ?? null,
     scoreGap: round((result.bestScore ?? 0) - (result.expectedCandidate?.score ?? 0)),
-    expectedWins: result.algorithmAudit?.expectedWins || [],
-    bestWins: result.algorithmAudit?.bestWins || [],
-    algorithmRanks: result.algorithmRanks,
-    algorithmVotes: result.algorithmVotes,
+    algorithmVotes: result.algorithmVotes?.counts || {},
+    strongestAlgorithmWinners: strongestAlgorithmWinners(result.algorithmRanks),
     geometryDiagnostics: result.geometryDiagnostics,
     detectionDiagnostics: result.detectionDiagnostics,
-    topCandidates: result.topCandidates,
+    candidateSearchDiagnostics: result.candidateSearchDiagnostics,
+    topCandidates: result.topCandidates?.slice(0, 10) || [],
     failureAnalysis: result.failureAnalysis
   };
 }
 
+function buildPriorityFailures(results) {
+  return results
+    .filter(result => result.expectedKnownInBase && !result.success)
+    .map(result => ({
+      fileName: result.fileName,
+      expectedReference: result.expectedReference,
+      bestReference: result.bestReference,
+      severity: failureSeverity(result),
+      reason: result.failureAnalysis?.dominantReason,
+      decisionHint: result.failureAnalysis?.decisionHint,
+      expectedRank: result.expectedRank,
+      bestScore: result.bestScore,
+      candidateSearchStatus: result.candidateSearchDiagnostics?.status,
+      topCandidates: result.topCandidates?.slice(0, 5) || []
+    }))
+    .sort((a, b) => b.severity - a.severity);
+}
+
+function failureSeverity(result) {
+  if (!result.detectedItems) return 100;
+  if (!result.expectedKnownInBase) return 90;
+  if (!result.expectedCandidate) return 80;
+  if (!result.top10) return 70;
+  if (!result.top3) return 50;
+  return 25;
+}
+
 function summarizeAlgorithmEffectiveness(results) {
+  const failedWithExpected = results.filter(result => result.expectedKnownInBase && !result.success && result.expectedCandidate);
   return ALGORITHM_KEYS.map(key => {
-    const rows = results.map(result => result.algorithmAudit?.rows?.find(row => row.key === key)).filter(Boolean);
+    const rows = failedWithExpected.map(result => result.algorithmAudit?.rows?.find(row => row.key === key)).filter(Boolean);
     const usableRows = rows.filter(row => Number.isFinite(row.delta));
     const expectedWins = usableRows.filter(row => row.delta > 0).length;
     const bestWins = usableRows.filter(row => row.delta < 0).length;
@@ -307,8 +365,41 @@ function summarizeGlobalAlgorithmVotes(results) {
       else votes.other++;
       if (vote?.winnerReference) winners.set(vote.winnerReference, (winners.get(vote.winnerReference) || 0) + 1);
     }
-    return { key, votes, topWinners: Array.from(winners.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([reference, count]) => ({ reference, count })) };
-  });
+    return { key, votes, topWinners: Array.from(winners.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([reference, count]) => ({ reference, count })) };
+  }).filter(row => row.votes.expected || row.votes.currentTop1 || row.votes.other || row.votes.none);
+}
+
+function summarizeCandidateSearchDiagnostics(results) {
+  return results
+    .filter(result => result.expectedKnownInBase && !result.success)
+    .map(result => result.candidateSearchDiagnostics)
+    .filter(Boolean);
+}
+
+function buildCandidateSearchDiagnostics(result) {
+  if (!result.expectedKnownInBase) return { fileName: result.fileName, expectedReference: result.expectedReference, status: 'expected-not-in-base' };
+  if (!result.detectedItems) return { fileName: result.fileName, expectedReference: result.expectedReference, status: 'no-detection-before-candidate-search' };
+  if (result.expectedRank) {
+    return {
+      fileName: result.fileName,
+      expectedReference: result.expectedReference,
+      status: result.expectedRank === 1 ? 'expected-top1' : result.expectedRank <= 3 ? 'expected-in-top3' : 'expected-in-top10',
+      expectedRank: result.expectedRank,
+      bestReference: result.bestReference,
+      scoreGap: round((result.bestScore ?? 0) - (result.expectedCandidate?.score ?? 0))
+    };
+  }
+  return {
+    fileName: result.fileName,
+    expectedReference: result.expectedReference,
+    status: 'expected-missing-from-top10',
+    inspectedCandidateLimit: 10,
+    bestReference: result.bestReference,
+    bestScore: result.bestScore,
+    top5Alternatives: result.topCandidates?.slice(0, 5) || [],
+    likelyStage: 'candidate-search-or-signature-generation',
+    nextUsefulDiagnostic: 'calculer-le-rang-attendu-top50-ou-top100'
+  };
 }
 
 function summarizeGeometrySignals(results) {
@@ -319,6 +410,77 @@ function summarizeGeometrySignals(results) {
     averageCompactnessDelta: average(failed.map(result => Math.abs(result.geometryDiagnostics.deltas.expectedVsBestCompactness)).filter(Number.isFinite)),
     averageFillRatioDelta: average(failed.map(result => Math.abs(result.geometryDiagnostics.deltas.expectedVsBestFillRatio)).filter(Number.isFinite)),
     averageContourDensityDelta: average(failed.map(result => Math.abs(result.geometryDiagnostics.deltas.expectedVsBestContourDensity)).filter(Number.isFinite))
+  };
+}
+
+function summarizeWeightPresetBenchmark(presets) {
+  return (presets || []).map(preset => ({
+    name: preset.name,
+    category: preset.category,
+    description: preset.description,
+    top1Accuracy: preset.top1Accuracy,
+    top3Accuracy: preset.top3Accuracy,
+    top10Accuracy: preset.top10Accuracy,
+    changedDecisions: preset.changedDecisions,
+    baseWeights: preset.baseWeights,
+    advancedWeight: preset.advancedWeight,
+    advancedDetails: preset.advancedDetails,
+    failureRows: (preset.rows || [])
+      .filter(row => !row.top1 || row.changedDecision)
+      .slice(0, 10)
+      .map(row => ({
+        fileName: row.fileName,
+        expectedReference: row.expectedReference,
+        previousBestReference: row.previousBestReference,
+        newBestReference: row.newBestReference,
+        expectedRank: row.expectedRank,
+        top1: row.top1,
+        top3: row.top3,
+        changedDecision: row.changedDecision
+      }))
+  }));
+}
+
+function buildActionableRecommendations({ summary, noDetectionDetails, failureSummary, algorithmEffectiveness, confusionFamilies, candidateSearchDiagnostics }) {
+  const recommendations = [];
+  if (noDetectionDetails.length) recommendations.push({ priority: 1, action: 'corriger-segmentation-ou-rasterisation', reason: noDetectionDetails.length + ' profils sans detection', targets: noDetectionDetails.map(item => item.expectedReference) });
+  const missing = candidateSearchDiagnostics.filter(item => item.status === 'expected-missing-from-top10');
+  if (missing.length) recommendations.push({ priority: 2, action: 'ajouter-rang-attendu-top50-top100', reason: 'Le bon profil est absent du Top10 pour certains echecs', targets: missing.map(item => item.expectedReference) });
+  const top3 = failureSummary.top3ButNotTop1 || [];
+  if (top3.length) recommendations.push({ priority: 3, action: 'ajuster-ponderation-fusion', reason: 'Le bon profil est proche du Top1 pour certains cas', targets: top3.map(item => item.expectedReference) });
+  const weak = algorithmEffectiveness.filter(item => ['reduce', 'disable'].includes(item.recommendation));
+  if (weak.length) recommendations.push({ priority: 4, action: 'reduire-algorithmes-penalisants', reason: 'Certains algorithmes favorisent souvent le mauvais Top1', targets: weak.map(item => item.key) });
+  const strong = algorithmEffectiveness.filter(item => item.recommendation === 'increase');
+  if (strong.length) recommendations.push({ priority: 5, action: 'renforcer-algorithmes-fiables', reason: 'Certains algorithmes favorisent davantage le bon profil', targets: strong.map(item => item.key) });
+  if (confusionFamilies.length) recommendations.push({ priority: 6, action: 'analyser-familles-confuses', reason: 'Des familles de profils se melangent', targets: confusionFamilies.slice(0, 5).map(item => item.expectedFamily + '->' + item.bestFamily) });
+  if (!recommendations.length && summary.failedTop1 === 0) recommendations.push({ priority: 1, action: 'aucune-action-critique', reason: 'Tous les profils testes sont corrects', targets: [] });
+  return recommendations.sort((a, b) => a.priority - b.priority);
+}
+
+function buildReportForChatGPT({ summary, noDetectionDetails, failureSummary, candidateSearchDiagnostics, algorithmEffectiveness, confusionFamilies, actionableRecommendations }) {
+  return {
+    summary: {
+      total: summary.total,
+      top1Accuracy: summary.top1Accuracy,
+      failedTop1: summary.failedTop1,
+      noDetection: summary.noDetection,
+      outsideTop10: failureSummary.outsideTop10.length,
+      top3ButNotTop1: failureSummary.top3ButNotTop1.length
+    },
+    priorityFailures: [...failureSummary.outsideTop10, ...failureSummary.top3ButNotTop1].slice(0, 12).map(item => ({
+      expectedReference: item.expectedReference,
+      bestReference: item.bestReference,
+      reason: item.failureAnalysis?.dominantReason,
+      decisionHint: item.failureAnalysis?.decisionHint,
+      expectedRank: item.expectedRank,
+      bestScore: item.bestScore
+    })),
+    noDetections: noDetectionDetails.map(item => item.expectedReference),
+    missingFromTop10: candidateSearchDiagnostics.filter(item => item.status === 'expected-missing-from-top10').map(item => item.expectedReference),
+    algorithmsToIncrease: algorithmEffectiveness.filter(item => item.recommendation === 'increase').map(item => item.key),
+    algorithmsToReduce: algorithmEffectiveness.filter(item => ['reduce', 'disable'].includes(item.recommendation)).map(item => item.key),
+    mainConfusions: confusionFamilies.slice(0, 8),
+    recommendedNextActions: actionableRecommendations.slice(0, 6)
   };
 }
 
@@ -350,6 +512,20 @@ function buildAlgorithmVotes(algorithmRanks, expectedReference, bestReference) {
     return acc;
   }, {});
   return { counts, perAlgorithm };
+}
+
+function strongestAlgorithmWinners(algorithmRanks) {
+  return (algorithmRanks || [])
+    .filter(row => row.winnerReference)
+    .slice(0, 20)
+    .reduce((acc, row) => {
+      const current = acc.find(item => item.reference === row.winnerReference);
+      if (current) current.algorithms.push(row.key);
+      else acc.push({ reference: row.winnerReference, algorithms: [row.key] });
+      return acc;
+    }, [])
+    .sort((a, b) => b.algorithms.length - a.algorithms.length)
+    .slice(0, 5);
 }
 
 function buildAlgorithmAudit(best, expectedCandidate) {
@@ -493,7 +669,7 @@ function summarizeTopCandidates(topCandidates) {
 function buildDebugSamples(results) {
   return results
     .filter(result => !result.success || !result.detectedItems)
-    .slice(0, 12)
+    .slice(0, 8)
     .map(result => ({
       fileName: result.fileName,
       expectedReference: result.expectedReference,
@@ -502,10 +678,11 @@ function buildDebugSamples(results) {
       bestScore: result.bestScore,
       expectedScore: result.expectedCandidate?.score ?? null,
       failureAnalysis: result.failureAnalysis,
-      algorithmVotes: result.algorithmVotes,
+      candidateSearchDiagnostics: result.candidateSearchDiagnostics,
+      algorithmVotes: result.algorithmVotes?.counts,
       geometryDiagnostics: result.geometryDiagnostics,
       detectionDiagnostics: result.detectionDiagnostics,
-      topCandidates: result.topCandidates
+      topCandidates: result.topCandidates?.slice(0, 5)
     }));
 }
 
@@ -534,7 +711,7 @@ function buildConfusionFamilies(results) {
     current.examples.push({ expectedReference: result.expectedReference, bestReference: result.bestReference, fileName: result.fileName });
     map.set(key, current);
   }
-  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  return Array.from(map.values()).sort((a, b) => b.count - a.count).slice(0, 20);
 }
 
 function familyKey(reference) {
@@ -584,19 +761,6 @@ function guessFailureReason(result) {
   if (result.algorithmAudit?.bestWins?.includes('localFeature') || result.algorithmAudit?.bestWins?.includes('minutiae')) return 'local-confusion';
   if (familyKey(result.expectedReference) === familyKey(result.bestReference)) return 'family-confusion';
   return 'scoring-fusion-issue';
-}
-
-function pickAutoSettings(autoSettings) {
-  if (!autoSettings) return null;
-  return {
-    brightness: autoSettings.brightness,
-    contrast: autoSettings.contrast,
-    edgeQuantile: autoSettings.edgeQuantile,
-    linkRadius: autoSettings.linkRadius,
-    minArea: autoSettings.minArea,
-    mergeGap: autoSettings.mergeGap,
-    source: autoSettings.source
-  };
 }
 
 function referenceFromFilename(fileName) {
