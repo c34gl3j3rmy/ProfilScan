@@ -3,8 +3,8 @@ import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js'
 
 export async function importDataprofilsText(text, onProgress = () => {}, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  report(onProgress, 22, 'Extraction de la base', 'Lecture de la base profils');
-  const { profiles, sourceFormat } = parseDataprofils(text);
+  report(onProgress, 22, 'Extraction de la base', 'Lecture de dataprofils.json');
+  const profiles = parseDataprofilsJson(text);
 
   report(onProgress, 35, 'Validation des profils', `${profiles.length} profils trouves`);
   const validProfiles = [];
@@ -54,7 +54,7 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
   return {
     id: 'local-profils',
     name: 'Base profils locale',
-    source: sourceFormat,
+    source: 'dataprofils.json',
     importedAt: new Date().toISOString(),
     pipelineSettings: settings,
     stats: {
@@ -76,132 +76,49 @@ function yieldToBrowser() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-function parseDataprofils(text) {
-  const trimmed = String(text || '').trim();
-  const arrayText = looksLikeJson(trimmed) ? trimmed : extractArrayText(trimmed);
-  const jsonText = looksLikeJson(trimmed) ? trimmed : toJsonLikeArray(arrayText);
-
+function parseDataprofilsJson(text) {
   try {
-    const parsed = JSON.parse(jsonText);
+    const parsed = JSON.parse(String(text || '').trim());
     const profiles = Array.isArray(parsed) ? parsed : parsed.profiles;
     if (!Array.isArray(profiles)) throw new Error('Le fichier doit contenir un tableau de profils.');
-    return { profiles, sourceFormat: looksLikeJson(trimmed) ? 'dataprofils.json' : 'dataprofils.js' };
+    return profiles;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Base profils illisible : ${message}`);
+    throw new Error(`dataprofils.json illisible : ${message}`);
   }
-}
-
-function looksLikeJson(text) {
-  return text.startsWith('[') || text.startsWith('{');
-}
-
-function toJsonLikeArray(arrayText) {
-  const withoutComments = stripComments(arrayText);
-  return withoutComments
-    .replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3')
-    .replace(/,\s*([}\]])/g, '$1');
-}
-
-function stripComments(text) {
-  let output = '';
-  let inString = false;
-  let quote = '';
-  let escaped = false;
-  let inLineComment = false;
-  let inBlockComment = false;
-
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    const next = text[index + 1];
-
-    if (inLineComment) {
-      if (char === '\n') {
-        inLineComment = false;
-        output += char;
-      }
-      continue;
-    }
-
-    if (inBlockComment) {
-      if (char === '*' && next === '/') {
-        inBlockComment = false;
-        index++;
-      }
-      continue;
-    }
-
-    if (inString) {
-      output += char;
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === quote) inString = false;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      inString = true;
-      quote = char;
-      output += char;
-      continue;
-    }
-
-    if (char === '/' && next === '/') {
-      inLineComment = true;
-      index++;
-      continue;
-    }
-
-    if (char === '/' && next === '*') {
-      inBlockComment = true;
-      index++;
-      continue;
-    }
-
-    output += char;
-  }
-
-  return output;
-}
-
-function extractArrayText(text) {
-  const start = text.indexOf('[');
-  const end = text.lastIndexOf(']');
-  if (start < 0 || end <= start) throw new Error('Tableau profils introuvable.');
-  return text.slice(start, end + 1);
 }
 
 function normalizeProfile(profile) {
-  const reference = textValue(profile.ref ?? profile.reference);
-  const designation = textValue(profile.name ?? profile.designation);
-  const width = numberValue(profile.profileWidth ?? profile.largeur ?? profile.width);
-  const height = numberValue(profile.profileHeight ?? profile.hauteur ?? profile.height);
-  const svgPath = textValue(profile.path ?? profile.paths ?? profile.svgPath);
+  const reference = textValue(profile.ref);
+  const designation = textValue(profile.name);
+  const width = numberValue(profile.profileWidth);
+  const height = numberValue(profile.profileHeight);
+  const svgPath = textValue(profile.path);
 
   if (!reference || !svgPath || !Number.isFinite(width) || !Number.isFinite(height) || height <= 0) return null;
 
   return {
     reference,
     designation,
-    line: nullableText(profile.line ?? profile.ligne),
+    line: nullableText(profile.line),
     config: nullableText(profile.config),
-    oldRef: nullableText(profile.oldRef ?? profile.ancienneRef),
-    finish: nullableText(profile.finish ?? profile.coloris),
+    oldRef: nullableText(profile.oldRef),
+    finish: nullableText(profile.finish),
     width,
     height,
     ratio: width / height,
-    surface: numberValue(profile.area ?? profile.surface),
-    weight: numberValue(profile.weight ?? profile.poids),
-    perimeter: numberValue(profile.externalPerimeter ?? profile.perimetreExt),
-    externalPerimeter: numberValue(profile.externalPerimeter ?? profile.perimetreExt),
-    internalPerimeter: nullableNumber(profile.internalPerimeter ?? profile.perimetreInt),
-    totalPerimeter: numberValue(profile.totalPerimeter ?? profile.perimetreTotal),
-    inertiaIxx: numberValue(profile.inertiaIxx ?? profile.momentInertieIxx),
-    inertiaIyy: numberValue(profile.inertiaIyy ?? profile.momentInertieIyy),
-    sectionModulusIxV: numberValue(profile.sectionModulusIxV ?? profile.moduleFlexionIxV),
-    sectionModulusIyV: numberValue(profile.sectionModulusIyV ?? profile.moduleFlexionIyV),
-    circumscribedDiameter: nullableNumber(profile.circumscribedDiameter ?? profile.diametreCirconscrit),
-    profileDiagonal: numberValue(profile.profileDiagonal ?? profile.diagonale),
+    surface: numberValue(profile.area),
+    weight: numberValue(profile.weight),
+    perimeter: numberValue(profile.externalPerimeter),
+    externalPerimeter: numberValue(profile.externalPerimeter),
+    internalPerimeter: nullableNumber(profile.internalPerimeter),
+    totalPerimeter: numberValue(profile.totalPerimeter),
+    inertiaIxx: numberValue(profile.inertiaIxx),
+    inertiaIyy: numberValue(profile.inertiaIyy),
+    sectionModulusIxV: numberValue(profile.sectionModulusIxV),
+    sectionModulusIyV: numberValue(profile.sectionModulusIyV),
+    circumscribedDiameter: nullableNumber(profile.circumscribedDiameter),
+    profileDiagonal: numberValue(profile.profileDiagonal),
     svgPath,
     raw: profile
   };
