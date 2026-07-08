@@ -9,8 +9,10 @@ const runButton = document.querySelector('#runButton');
 const statusNode = document.querySelector('#status');
 
 const uploadOriginalCanvas = document.querySelector('#uploadOriginalCanvas');
+const uploadEdgeCanvas = document.querySelector('#uploadEdgeCanvas');
 const uploadContourCanvas = document.querySelector('#uploadContourCanvas');
 const expectedOriginalCanvas = document.querySelector('#expectedOriginalCanvas');
+const expectedEdgeCanvas = document.querySelector('#expectedEdgeCanvas');
 const expectedContourCanvas = document.querySelector('#expectedContourCanvas');
 const uploadTable = document.querySelector('#uploadTable');
 const expectedTable = document.querySelector('#expectedTable');
@@ -56,6 +58,8 @@ async function runPipelineCompare() {
     const expectedAuto = await computeAutoImageSettings(expectedBitmap);
     const expectedAnalysis = await analyzeBitmap(await cloneBitmap(expectedBitmap), collection, buildWorkerSettings(expectedAuto, collection, expectedReference));
 
+    drawEdgePanel(uploadAnalysis, uploadEdgeCanvas);
+    drawEdgePanel(expectedAnalysis, expectedEdgeCanvas);
     drawContourPanel(uploadAnalysis, uploadContourCanvas);
     drawContourPanel(expectedAnalysis, expectedContourCanvas);
 
@@ -130,12 +134,14 @@ function summarizeAnalysis(analysis, expectedReference) {
   const expectedIndex = topCandidates.findIndex(candidate => sameReference(candidate.reference, expectedReference));
   const contours = analysis.debug?.contours || [];
   const sectionCandidates = analysis.debug?.sectionCandidates || [];
+  const edgePoints = analysis.debug?.edges || [];
   const holes = contours.reduce((sum, contour) => sum + (contour.holes?.length || 0), 0);
   const top5 = topCandidates.slice(0, 5).map((candidate, index) => ({ rank: index + 1, reference: candidate.reference, score: round(candidate.score) }));
   return {
     summary: {
       imageWidth: analysis.width,
       imageHeight: analysis.height,
+      edgePoints: edgePoints.length,
       detectedItems: analysis.items?.length || 0,
       contours: contours.length,
       holes,
@@ -156,6 +162,7 @@ function compareSummaries(upload, expected, expectedReference) {
   const uploadSummary = upload.summary;
   const expectedSummary = expected.summary;
   const checks = [
+    check('edgePoints', uploadSummary.edgePoints, expectedSummary.edgePoints, Math.max(25, expectedSummary.edgePoints * 0.12), 'Nombre de points d arete different des la segmentation.'),
     check('detectedItems', uploadSummary.detectedItems, expectedSummary.detectedItems, 0, 'Nombre de sections detectees different.'),
     check('contours', uploadSummary.contours, expectedSummary.contours, 0, 'Nombre de contours different.'),
     check('holes', uploadSummary.holes, expectedSummary.holes, 0, 'Nombre de trous different.'),
@@ -182,7 +189,7 @@ function compareSummaries(upload, expected, expectedReference) {
 function check(key, uploadValue, expectedValue, tolerance, hint) {
   const difference = numericDiff(uploadValue, expectedValue);
   const status = difference === null ? 'unknown' : Math.abs(difference) <= tolerance ? 'ok' : 'mismatch';
-  return { key, uploadValue, expectedValue, difference, tolerance, status, hint: status === 'mismatch' ? hint : null };
+  return { key, uploadValue, expectedValue, difference, tolerance: round(tolerance), status, hint: status === 'mismatch' ? hint : null };
 }
 
 function checkStatus(key, status, hint) {
@@ -195,6 +202,25 @@ function drawBitmap(bitmap, canvas) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+}
+
+function drawEdgePanel(analysis, canvas) {
+  const width = analysis.width || 900;
+  const height = analysis.height || 640;
+  const points = analysis.debug?.edges || [];
+  const ctx = canvas.getContext('2d');
+  fitCanvas(canvas, width, height, 900, 640);
+  const scaleX = canvas.width / width;
+  const scaleY = canvas.height / height;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#111827';
+  for (const point of points) {
+    ctx.fillRect(Math.round(point.x * scaleX), Math.round(point.y * scaleY), 1.5, 1.5);
+  }
+  ctx.fillStyle = '#2563eb';
+  ctx.font = '14px sans-serif';
+  ctx.fillText(points.length + ' points d arete echantillonnes', 12, 22);
 }
 
 function drawContourPanel(analysis, canvas) {
