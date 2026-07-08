@@ -12,15 +12,15 @@ export async function renderSvgTextToBitmap(text, options = {}) {
   const svgText = String(text || '').trim();
   if (!svgText) throw new Error('SVG vide.');
 
-  const document = new DOMParser().parseFromString(svgText, 'image/svg+xml');
-  const parserError = document.querySelector('parsererror');
+  const svgDocument = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+  const parserError = svgDocument.querySelector('parsererror');
   if (parserError) throw new Error('SVG illisible.');
 
-  const svg = document.querySelector('svg');
+  const svg = svgDocument.querySelector('svg');
   if (!svg) throw new Error('Balise SVG introuvable.');
 
   const viewBox = extractViewBox(svg);
-  const paths = extractDrawablePaths(document);
+  const paths = extractDrawablePaths(svgDocument);
   if (!paths.length) throw new Error('SVG sans chemin exploitable.');
 
   const targetMaxSize = clampNumber(options.targetMaxSize, 1024, 256, 2048);
@@ -33,7 +33,7 @@ export async function renderSvgTextToBitmap(text, options = {}) {
   const offsetX = (width - viewBox.width * scale) / 2;
   const offsetY = (height - viewBox.height * scale) / 2;
 
-  const canvas = document.createElement('canvas');
+  const canvas = globalThis.document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -76,13 +76,13 @@ function extractViewBox(svg) {
   return { x: 0, y: 0, width, height };
 }
 
-function extractDrawablePaths(document) {
-  const pathTexts = [...document.querySelectorAll('path')]
+function extractDrawablePaths(svgDocument) {
+  const pathTexts = [...svgDocument.querySelectorAll('path')]
     .map(path => path.getAttribute('d'))
     .map(value => String(value || '').trim())
     .filter(Boolean);
 
-  const polylineTexts = [...document.querySelectorAll('polyline, polygon')]
+  const polylineTexts = [...svgDocument.querySelectorAll('polyline, polygon')]
     .map(element => pointsToPath(element.getAttribute('points'), element.tagName.toLowerCase() === 'polygon'))
     .filter(Boolean);
 
