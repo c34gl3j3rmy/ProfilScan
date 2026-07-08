@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProfilScan - Comparaison visuelle</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 24px; background: #f4f6f8; color: #17202a; }
+    main { max-width: 1280px; margin: 0 auto; display: grid; gap: 20px; }
+    h1 { margin: 0; font-size: 1.7rem; }
+    .card { background: #fff; border: 1px solid #d9e0e7; border-radius: 14px; padding: 18px; box-shadow: 0 8px 24px rgba(15, 23, 42, .08); }
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: end; }
+    label { display: grid; gap: 6px; font-weight: 650; }
+    input, button { font: inherit; border-radius: 10px; border: 1px solid #cbd5df; padding: 10px 12px; background: #fff; color: inherit; }
+    button { cursor: pointer; font-weight: 700; background: #14213d; color: white; border: 0; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .status { margin-top: 12px; color: #4b5563; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .panel { display: grid; gap: 10px; }
+    .panel h2 { margin: 0; font-size: 1.05rem; }
+    canvas { width: 100%; max-height: 520px; object-fit: contain; background: white; border: 1px solid #cbd5df; border-radius: 10px; image-rendering: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 7px 6px; }
+    .warn { color: #9a3412; font-weight: 700; }
+    .ok { color: #166534; font-weight: 700; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0f172a; color: #e5e7eb; }
+      .card { background: #111827; border-color: #334155; }
+      input, button { border-color: #475569; }
+      input { background: #0f172a; }
+      canvas { background: #fff; }
+      th, td { border-bottom-color: #334155; }
+      .status { color: #cbd5e1; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Comparaison visuelle benchmark</h1>
+      <p>Compare l'image réellement rasterisée depuis le fichier uploadé avec le profil attendu reconstruit depuis la base importée <code>dataprofils.json</code>.</p>
+      <div class="controls">
+        <label>Fichier image ou SVG à tester
+          <input id="fileInput" type="file" accept="image/*,.svg">
+        </label>
+        <label>Référence attendue (optionnel)
+          <input id="referenceInput" placeholder="Déduit du nom du fichier">
+        </label>
+        <button id="compareButton" type="button">Comparer</button>
+        <button id="downloadButton" type="button" disabled>Télécharger le PNG</button>
+      </div>
+      <div id="status" class="status">Base locale nécessaire : importer d'abord <code>dataprofils.json</code> dans ProfilScan.</div>
+    </section>
+
+    <section class="grid">
+      <article class="card panel">
+        <h2>1. Image uploadée rasterisée</h2>
+        <canvas id="uploadedCanvas" width="512" height="512"></canvas>
+        <table id="uploadedStats"></table>
+      </article>
+      <article class="card panel">
+        <h2>2. Profil attendu depuis la base</h2>
+        <canvas id="expectedCanvas" width="512" height="512"></canvas>
+        <table id="expectedStats"></table>
+      </article>
+      <article class="card panel">
+        <h2>3. Écart visuel simplifié</h2>
+        <canvas id="diffCanvas" width="512" height="512"></canvas>
+        <table id="diffStats"></table>
+      </article>
+    </section>
+  </main>
+  <script type="module" src="./src/app/visual-compare.js"></script>
+</body>
+</html>
