@@ -38,6 +38,7 @@ self.onmessage = async event => {
       .map(object => scaleDetectedObject(object, source.scale));
     postProgress(88, 'Comparaison avec la base', `${objects.length} sections candidates`);
     const items = await Promise.all(objects.map(object => matchObject(object, collection, activeSettings)));
+    const debugPipeline = buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items });
     const debug = {
       edges: edgePoints,
       segmentation: segmentation.stats,
@@ -55,10 +56,11 @@ self.onmessage = async event => {
         sectionScore: object.sectionScore || 0,
         points: simplifyContourPoints(object.points, 180),
         holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: simplifyContourPoints(hole.points, 120) }))
-      }))
+      })),
+      debugPipeline
     };
     postProgress(96, 'Annotation', `${items.length} sections detectees`);
-    self.postMessage({ width: imageBitmap.width, height: imageBitmap.height, preview: imageBitmap, items, settings: activeSettings, debug }, [imageBitmap]);
+    self.postMessage({ width: imageBitmap.width, height: imageBitmap.height, preview: imageBitmap, items, settings: activeSettings, debug, debugPipeline }, [imageBitmap]);
   } catch (error) {
     self.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
   }
@@ -198,6 +200,94 @@ function scaleDetectedObject(object, scale) {
     points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })),
     holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: hole.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })) }))
   };
+}
+
+function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items }) {
+  return {
+    version: '1.0',
+    source: {
+      width: imageBitmap.width,
+      height: imageBitmap.height,
+      scaledWidth: source.width,
+      scaledHeight: source.height,
+      scale: source.scale
+    },
+    preprocessing: {
+      settings: activeSettings.image,
+      gray: summarizeArray(source.imageData?.data),
+      denoisedApplied: activeSettings.image.textureSuppression > 0,
+      blurRadius: activeSettings.image.blurRadius
+    },
+    segmentation: {
+      settings: activeSettings.detection,
+      mode: segmentation.mode,
+      stats: segmentation.stats,
+      sampledEdgePoints: edgePoints.length
+    },
+    linking: {
+      linkRadius: activeSettings.detection.linkRadius,
+      linkedEdgePixels: countMaskPixels(linkedEdges)
+    },
+    components: {
+      count: components.length,
+      preview: components.slice(0, 12).map(component => ({
+        x: component.x,
+        y: component.y,
+        width: component.width,
+        height: component.height,
+        area: component.area,
+        closed: component.closed,
+        points: component.points.length,
+        holes: component.holes.length
+      }))
+    },
+    candidates: {
+      count: objects.length,
+      preview: objects.slice(0, 12).map(object => ({
+        x: object.x,
+        y: object.y,
+        width: object.width,
+        height: object.height,
+        area: object.area,
+        closed: object.closed,
+        sectionScore: object.sectionScore || 0,
+        points: object.points.length,
+        holes: object.holes.length
+      }))
+    },
+    matching: {
+      count: items.length,
+      topItems: items.slice(0, 8).map(item => ({
+        reference: item.reference,
+        score: item.score,
+        sectionScore: item.sectionScore,
+        topCandidates: (item.topCandidates || []).slice(0, 5).map(candidate => ({ reference: candidate.reference, score: candidate.score }))
+      }))
+    }
+  };
+}
+
+function summarizeArray(arrayLike) {
+  if (!arrayLike?.length) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  let sum = 0;
+  const step = Math.max(1, Math.ceil(arrayLike.length / 20000));
+  let count = 0;
+  for (let i = 0; i < arrayLike.length; i += step) {
+    const value = arrayLike[i];
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+    sum += value;
+    count++;
+  }
+  return { min, max, mean: count ? sum / count : 0, sampleCount: count };
+}
+
+function countMaskPixels(mask) {
+  let count = 0;
+  for (let i = 0; i < mask.length; i++) if (mask[i]) count++;
+  return count;
 }
 
 async function matchObject(object, collection, settings) {
