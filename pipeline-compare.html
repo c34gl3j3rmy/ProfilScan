@@ -53,13 +53,21 @@
     <section class="two">
       <article class="card stage">
         <h2>Image uploadée</h2>
+        <h3>1. Original rasterisé</h3>
         <canvas id="uploadOriginalCanvas" width="900" height="640"></canvas>
+        <h3>2. Segmentation / points d'arête</h3>
+        <canvas id="uploadEdgeCanvas" width="900" height="640"></canvas>
+        <h3>3. Contours et candidats</h3>
         <canvas id="uploadContourCanvas" width="900" height="640"></canvas>
         <table id="uploadTable"></table>
       </article>
       <article class="card stage">
         <h2>Profil attendu</h2>
+        <h3>1. Original rasterisé</h3>
         <canvas id="expectedOriginalCanvas" width="900" height="640"></canvas>
+        <h3>2. Segmentation / points d'arête</h3>
+        <canvas id="expectedEdgeCanvas" width="900" height="640"></canvas>
+        <h3>3. Contours et candidats</h3>
         <canvas id="expectedContourCanvas" width="900" height="640"></canvas>
         <table id="expectedTable"></table>
       </article>
