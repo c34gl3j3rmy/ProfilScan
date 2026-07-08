@@ -3,8 +3,6 @@ import { computeAutoImageSettings, applyAutoImageSettings } from './auto-setting
 import { buildSettings } from './settings-reader.js';
 import { getCollection } from '../storage/indexed-db.js';
 import { buildWeightPresetBenchmark } from './benchmark-weight-presets.js';
-import { findTopMatches } from '../shape-engine/candidate-search.js';
-import { buildUnifiedFingerprint } from '../shape-engine/fingerprint-pipeline.js';
 
 const benchmarkInput = document.querySelector('#benchmarkInput');
 const baseStatus = document.querySelector('#baseStatus');
@@ -79,85 +77,68 @@ async function runBenchmark(fileList) {
 
 async function analyzeRasterBenchmarkFile(file, expectedReference, settings, collection) {
   const imageBitmap = await loadImageFile(file);
-  const autoSettings = await computeAutoImageSettings(imageBitmap);
-  applyAutoImageSettings(inputs, autoSettings);
-  const activeSettings = buildSettings(inputs);
-  const analysis = await analyzeBitmap(imageBitmap, collection, activeSettings);
-  return summarizeImageResult(file, expectedReference, autoSettings, activeSettings, analysis, collection);
+  return analyzeBitmapBenchmarkImage(file, expectedReference, imageBitmap, settings, collection, null);
 }
 
 async function analyzeSvgBenchmarkFile(file, expectedReference, settings, collection) {
+  const imageBitmap = await renderSvgFileToBitmap(file);
+  const svgInfo = { mode: 'svg-rasterized-before-analysis', rasterizedWidth: imageBitmap.width, rasterizedHeight: imageBitmap.height };
+  return analyzeBitmapBenchmarkImage(file, expectedReference, imageBitmap, settings, collection, svgInfo);
+}
+
+async function analyzeBitmapBenchmarkImage(file, expectedReference, settingsImageBitmap, settings, collection, sourceInfo) {
+  const autoSettings = await computeAutoImageSettings(settingsImageBitmap);
+  applyAutoImageSettings(inputs, autoSettings);
+  const activeSettings = buildSettings(inputs);
+  const analysis = await analyzeBitmap(settingsImageBitmap, collection, activeSettings);
+  const mergedAutoSettings = sourceInfo ? { ...autoSettings, source: sourceInfo } : autoSettings;
+  return summarizeImageResult(file, expectedReference, mergedAutoSettings, activeSettings, analysis, collection);
+}
+
+async function renderSvgFileToBitmap(file) {
   const text = await file.text();
-  const profile = parseSvgProfile(text, expectedReference, collection);
-  const fingerprint = await buildUnifiedFingerprint({ kind: 'profile', profile }, settings.pipelineSettings || collection?.pipelineSettings || {});
-  const topCandidates = findTopMatches(fingerprint, collection, settings.weights, 10);
-  const best = topCandidates[0] || null;
-  const analysis = {
-    width: profile.width,
-    height: profile.height,
-    items: best ? [{
-      reference: best.reference,
-      designation: best.designation,
-      score: best.score,
-      scoreDetails: best.scoreDetails,
-      topCandidates,
-      boundingBox: { x: 0, y: 0, width: profile.width, height: profile.height }
-    }] : [],
-    debug: {
-      contours: [{ closed: true, points: fingerprint.descriptors?.points || [], holes: [] }],
-      segmentationMode: 'svg-unified-benchmark',
-      segmentation: { source: 'svg', pipeline: fingerprint.summary?.pipelineMode || fingerprint.summary?.source || 'unified' }
-    }
-  };
-  return summarizeImageResult(file, expectedReference, { mode: 'svg-unified' }, settings, analysis, collection);
+  const { width, height } = extractSvgRasterSize(text);
+  const image = await loadSvgImage(text);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(image, 0, 0, width, height);
+  return createImageBitmap(canvas);
 }
 
-function parseSvgProfile(text, expectedReference, collection) {
-  const expectedProfile = findProfile(collection, expectedReference);
-  const svgPath = extractSvgPath(text);
-  if (!svgPath) throw new Error('SVG sans chemin exploitable.');
-  const dimensions = extractSvgDimensions(text, expectedProfile);
-  return {
-    reference: expectedReference,
-    designation: expectedProfile?.designation || '',
-    width: dimensions.width,
-    height: dimensions.height,
-    ratio: dimensions.width / dimensions.height,
-    surface: expectedProfile?.surface || 0,
-    perimeter: expectedProfile?.perimeter || 0,
-    svgPath
-  };
+function loadSvgImage(text) {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([text], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('SVG impossible a rasteriser.'));
+    };
+    image.src = url;
+  });
 }
 
-function extractSvgPath(text) {
-  const paths = [...String(text).matchAll(/<path\b[^>]*\sd=["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
-  if (paths.length) return paths.join(' ');
-  const polylines = [...String(text).matchAll(/<(?:polyline|polygon)\b[^>]*\spoints=["']([^"']+)["'][^>]*>/gi)].map(match => pointsToPath(match[1]));
-  return polylines.filter(Boolean).join(' ');
-}
-
-function pointsToPath(pointsText) {
-  const numbers = String(pointsText).match(/[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g)?.map(Number) || [];
-  const pairs = [];
-  for (let index = 0; index < numbers.length - 1; index += 2) pairs.push([numbers[index], numbers[index + 1]]);
-  if (!pairs.length) return '';
-  return 'M ' + pairs.map(pair => pair.join(' ')).join(' L ') + ' Z';
-}
-
-function extractSvgDimensions(text, fallbackProfile) {
+function extractSvgRasterSize(text) {
   const viewBox = String(text).match(/viewBox=["']([^"']+)["']/i)?.[1]
     ?.trim()
     .split(/[\s,]+/)
     .map(Number)
     .filter(Number.isFinite);
-  if (viewBox?.length >= 4 && viewBox[2] > 0 && viewBox[3] > 0) return { width: viewBox[2], height: viewBox[3] };
-
-  const width = parseSvgLength(String(text).match(/<svg\b[^>]*\swidth=["']([^"']+)["']/i)?.[1]);
-  const height = parseSvgLength(String(text).match(/<svg\b[^>]*\sheight=["']([^"']+)["']/i)?.[1]);
-  if (width > 0 && height > 0) return { width, height };
-
-  if (fallbackProfile?.width > 0 && fallbackProfile?.height > 0) return { width: fallbackProfile.width, height: fallbackProfile.height };
-  return { width: 100, height: 100 };
+  const width = viewBox?.length >= 4 && viewBox[2] > 0 ? viewBox[2] : parseSvgLength(String(text).match(/<svg\b[^>]*\swidth=["']([^"']+)["']/i)?.[1]) || 100;
+  const height = viewBox?.length >= 4 && viewBox[3] > 0 ? viewBox[3] : parseSvgLength(String(text).match(/<svg\b[^>]*\sheight=["']([^"']+)["']/i)?.[1]) || 100;
+  const scale = Math.min(8, Math.max(3, 900 / Math.max(width, height)));
+  return {
+    width: Math.max(64, Math.round(width * scale)),
+    height: Math.max(64, Math.round(height * scale))
+  };
 }
 
 function parseSvgLength(value) {
@@ -239,10 +220,10 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
 function buildBenchmarkReport({ startedAt, files, results, errors, collection }) {
   return {
     type: 'ProfilScan batch benchmark report',
-    version: 'batch-benchmark-v3',
+    version: 'batch-benchmark-v4',
     startedAt,
     completedAt: new Date().toISOString(),
-    input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension' },
+    input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension', svgMode: 'rasterized-before-analysis' },
     base: { name: collection?.name, profiles: collection?.profiles?.length, importedAt: collection?.importedAt, pipelineSettings: collection?.pipelineSettings },
     summary: summarizeBenchmark(results, errors),
     failureSummary: summarizeFailures(results),
@@ -383,7 +364,7 @@ function algorithmVerdict(delta) {
 
 function referenceFromFilename(fileName) {
   const dot = fileName.lastIndexOf('.');
-  return (dot > 0 ? fileName.slice(0, dot) : fileName).trim();
+  return (dot > 0 ? fileName.slice(0, dot) : fileName).trim().replace(/\.min$/i, '');
 }
 
 function sameReference(a, b) {
