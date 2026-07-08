@@ -82,40 +82,37 @@
       <p>Cette zone isole les premières étapes critiques : rasterisation, masque noir/blanc, recadrage bbox et normalisation bbox. Elle aide à repérer si l'écart apparaît avant le matching.</p>
       <table id="pipelineStats"></table>
       <div class="pipeline-grid">
-        <article class="panel">
-          <h3>Masque upload</h3>
-          <canvas id="uploadedMaskCanvas" width="384" height="384"></canvas>
-        </article>
-        <article class="panel">
-          <h3>Masque attendu</h3>
-          <canvas id="expectedMaskCanvas" width="384" height="384"></canvas>
-        </article>
-        <article class="panel">
-          <h3>Différence des masques</h3>
-          <canvas id="maskDiffCanvas" width="384" height="384"></canvas>
-        </article>
-        <article class="panel">
-          <h3>Upload normalisé bbox</h3>
-          <canvas id="uploadedNormalizedCanvas" width="384" height="384"></canvas>
-        </article>
-        <article class="panel">
-          <h3>Attendu normalisé bbox</h3>
-          <canvas id="expectedNormalizedCanvas" width="384" height="384"></canvas>
-        </article>
-        <article class="panel">
-          <h3>Différence normalisée</h3>
-          <canvas id="normalizedDiffCanvas" width="384" height="384"></canvas>
-        </article>
+        <article class="panel"><h3>Masque upload</h3><canvas id="uploadedMaskCanvas" width="384" height="384"></canvas></article>
+        <article class="panel"><h3>Masque attendu</h3><canvas id="expectedMaskCanvas" width="384" height="384"></canvas></article>
+        <article class="panel"><h3>Différence des masques</h3><canvas id="maskDiffCanvas" width="384" height="384"></canvas></article>
+        <article class="panel"><h3>Upload normalisé bbox</h3><canvas id="uploadedNormalizedCanvas" width="384" height="384"></canvas></article>
+        <article class="panel"><h3>Attendu normalisé bbox</h3><canvas id="expectedNormalizedCanvas" width="384" height="384"></canvas></article>
+        <article class="panel"><h3>Différence normalisée</h3><canvas id="normalizedDiffCanvas" width="384" height="384"></canvas></article>
       </div>
     </section>
 
     <section class="card panel">
       <h2>Diagnostic signatures et matching</h2>
-      <p>Cette zone est alimentée par le même <code>analysis-worker</code> que la reconnaissance normale. Elle affiche le Top10, le rang du profil attendu, les sous-scores disponibles et le résumé de signature stockée dans la base.</p>
-      <table id="signatureStats"></table>
+      <p>Cette zone est alimentée par le même <code>analysis-worker</code> que la reconnaissance normale. Elle extrait automatiquement le Top10, le rang du profil attendu et le résumé de signature stockée.</p>
+      <table id="signatureStats"><tr><td>Comparer un profil pour afficher les diagnostics de signature.</td></tr></table>
       <p>Lecture rapide : si les bitmaps sont proches mais que le rang attendu n'est pas 1, le problème se situe probablement dans la signature, le candidate-search, les pondérations ou un profil jumeau.</p>
     </section>
   </main>
   <script type="module" src="./src/app/visual-compare.js"></script>
+  <script>
+    const signatureStats = document.querySelector('#signatureStats');
+    const wantedRows = ['Signature attendue stockee', 'Worker Top10'];
+    const copySignatureRows = () => {
+      const stageRows = Array.from(document.querySelectorAll('#stageStats tr'));
+      if (!signatureStats || !stageRows.length) return;
+      const rows = stageRows.filter(row => wantedRows.includes(row.querySelector('th')?.textContent || ''));
+      if (!rows.length) return;
+      signatureStats.innerHTML = '';
+      for (const sourceRow of rows) {
+        signatureStats.appendChild(sourceRow.cloneNode(true));
+      }
+    };
+    new MutationObserver(copySignatureRows).observe(document.body, { childList: true, subtree: true });
+  </script>
 </body>
 </html>
