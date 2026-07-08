@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.4.9';
+const CACHE_NAME = 'profilscan-v1.5.0';
 const ASSETS = [
   './',
   './index.html',
