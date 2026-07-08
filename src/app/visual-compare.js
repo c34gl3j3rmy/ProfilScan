@@ -1,5 +1,6 @@
 import { loadImageFile } from './image-import.js';
 import { renderSvgTextToBitmap } from './svg-rasterizer.js';
+import { computeAutoImageSettings } from './auto-settings.js';
 import { getCollection } from '../storage/indexed-db.js';
 
 const fileInput = document.querySelector('#fileInput');
@@ -16,6 +17,7 @@ const expectedStats = document.querySelector('#expectedStats');
 const diffStats = document.querySelector('#diffStats');
 
 let lastComparison = null;
+let analysisWorker = null;
 const stageInspector = createStageInspector();
 
 compareButton?.addEventListener('click', runVisualComparison);
@@ -53,10 +55,13 @@ async function runVisualComparison() {
     const uploaded = drawBitmapToCanvas(uploadedBitmap, uploadedCanvas, 'Image uploadee');
     const expected = drawBitmapToCanvas(expectedBitmap, expectedCanvas, 'Profil attendu');
     const diff = drawDiff(uploadedCanvas, expectedCanvas, diffCanvas);
-    const pipeline = buildPipelineInspection(uploadedCanvas, expectedCanvas, expectedProfile, diff.stats);
 
-    renderStats(uploadedStats, uploaded.stats);
-    renderStats(expectedStats, expected.stats);
+    setStatus('Analyse de l image uploadee avec le worker principal...');
+    const workerDiagnostics = await analyzeUploadedBitmap(uploadedBitmap, collection, expectedReference);
+    const pipeline = buildPipelineInspection(uploadedCanvas, expectedCanvas, expectedProfile, diff.stats, workerDiagnostics);
+
+    renderStats(uploadedStats, { ...uploaded.stats, worker: workerDiagnostics.summary });
+    renderStats(expectedStats, { ...expected.stats, profileGeometry: pipeline.profileGeometry, signatureSummary: pipeline.expectedSignatureSummary });
     renderStats(diffStats, { ...diff.stats, firstDivergence: pipeline.firstDivergence, diagnostic: pipeline.diagnostic });
     renderPipelineInspection(pipeline);
 
@@ -72,7 +77,7 @@ async function runVisualComparison() {
       pipeline
     };
     downloadButton.disabled = false;
-    setStatus('Comparaison prete : ' + file.name + ' vs ' + expectedReference + ' - divergence probable : ' + pipeline.firstDivergence + '.', diff.stats.differencePercent > 8);
+    setStatus('Comparaison prete : ' + file.name + ' vs ' + expectedReference + ' - divergence probable : ' + pipeline.firstDivergence + '.', pipeline.hasMajorDivergence);
   } catch (error) {
     setStatus(formatError(error), true);
   } finally {
@@ -93,7 +98,74 @@ function buildProfileSvg(profile) {
   return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height + '"><path d="' + escapeAttribute(path) + '" fill="#000" stroke="#000" stroke-width="0.12" fill-rule="evenodd" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 }
 
-function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, diffStats) {
+async function analyzeUploadedBitmap(imageBitmap, collection, expectedReference) {
+  const auto = await computeAutoImageSettings(imageBitmap);
+  const settings = {
+    expectedReference,
+    image: { brightness: auto.brightness, contrast: auto.contrast, blurRadius: 1, textureSuppression: 0 },
+    detection: {
+      edgeQuantile: auto.edgeQuantile / 100,
+      linkRadius: auto.linkRadius,
+      minAreaRatio: auto.minArea / 10000,
+      mergeGapRatio: auto.mergeGap / 1000
+    },
+    pipelineSettings: collection.pipelineSettings || null
+  };
+  const analysis = await analyzeBitmapWithWorker(imageBitmap, collection, settings);
+  return summarizeWorkerAnalysis(analysis, expectedReference);
+}
+
+function analyzeBitmapWithWorker(imageBitmap, collection, settings) {
+  return new Promise((resolve, reject) => {
+    const worker = getAnalysisWorker();
+    worker.onmessage = event => {
+      const message = event.data;
+      if (message?.type === 'progress') return;
+      if (message?.type === 'error') reject(new Error(message.message || 'Erreur worker'));
+      else resolve(message);
+    };
+    worker.onerror = event => reject(new Error(formatError(event)));
+    worker.postMessage({ type: 'analyze', imageBitmap, collection, settings }, [imageBitmap]);
+  });
+}
+
+function getAnalysisWorker() {
+  if (!analysisWorker) analysisWorker = new Worker(new URL('../workers/analysis-worker.js', import.meta.url), { type: 'module' });
+  return analysisWorker;
+}
+
+function summarizeWorkerAnalysis(analysis, expectedReference) {
+  const firstItem = analysis.items?.[0] || null;
+  const topCandidates = firstItem?.topCandidates || [];
+  const expectedIndex = topCandidates.findIndex(candidate => sameReference(candidate.reference, expectedReference));
+  const expectedCandidate = expectedIndex >= 0 ? topCandidates[expectedIndex] : null;
+  const contours = analysis.debug?.contours || [];
+  const holes = contours.reduce((sum, contour) => sum + (contour.holes?.length || 0), 0);
+  const sectionCandidates = analysis.debug?.sectionCandidates || [];
+  return {
+    summary: {
+      detectedItems: analysis.items?.length || 0,
+      contours: contours.length,
+      holes,
+      sectionCandidates: sectionCandidates.length,
+      segmentationMode: analysis.debug?.segmentationMode || null,
+      bestReference: firstItem?.reference || null,
+      bestScore: round(firstItem?.score),
+      expectedRank: expectedIndex >= 0 ? expectedIndex + 1 : null,
+      expectedScore: round(expectedCandidate?.score)
+    },
+    topCandidates: topCandidates.slice(0, 10).map((candidate, index) => ({ rank: index + 1, reference: candidate.reference, score: round(candidate.score), scoreDetails: candidate.scoreDetails })),
+    expectedCandidate: expectedCandidate ? { rank: expectedIndex + 1, reference: expectedCandidate.reference, score: round(expectedCandidate.score), scoreDetails: expectedCandidate.scoreDetails } : null,
+    debug: {
+      segmentation: analysis.debug?.segmentation || null,
+      segmentationMode: analysis.debug?.segmentationMode || null,
+      sectionCandidates: sectionCandidates.slice(0, 8),
+      contours: contours.slice(0, 4).map(contour => ({ closed: contour.closed, sectionScore: round(contour.sectionScore), points: contour.points?.length || 0, holes: contour.holes?.length || 0 }))
+    }
+  };
+}
+
+function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, diffStats, workerDiagnostics) {
   const uploaded = analyzeCanvas(uploadCanvas);
   const expected = analyzeCanvas(expectedCanvas);
   const normalized = compareNormalizedBBoxes(uploadCanvas, expectedCanvas);
@@ -105,6 +177,8 @@ function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, 
     surface: round(expectedProfile.surface),
     perimeter: round(expectedProfile.perimeter)
   };
+  const expectedSignatureSummary = summarizeStoredSignature(expectedProfile);
+  const worker = workerDiagnostics?.summary || {};
 
   const steps = [
     compareStep('raster-size', 'Dimensions ImageBitmap', uploaded.sourceWidth || uploaded.width, expected.sourceWidth || expected.width, 4, 'Verifier viewBox, marge et rasterisation SVG.'),
@@ -113,18 +187,40 @@ function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, 
     compareStep('bbox-ratio', 'Ratio bbox noire', uploaded.bbox?.ratio, expected.bbox?.ratio, 0.03, 'Verifier bbox, rotation, centrage et marge.'),
     compareStep('bbox-fill', 'Remplissage bbox', bboxFill(uploaded), bboxFill(expected), 0.04, 'Verifier contour ferme, trous et remplissage.'),
     compareStep('normalized-diff', 'Difference apres normalisation bbox', normalized.differencePercent, 0, 5, 'Les formes comparees ne se superposent pas assez apres alignement.'),
-    compareStep('final-diff', 'Difference visuelle finale', diffStats.differencePercent, 0, 5, 'La divergence est visible sur les bitmaps finaux.')
+    compareStep('final-diff', 'Difference visuelle finale', diffStats.differencePercent, 0, 5, 'La divergence est visible sur les bitmaps finaux.'),
+    statusStep('worker-detection', 'Detection worker', worker.detectedItems > 0 ? 'ok' : 'mismatch', worker.detectedItems || 0, 'Aucun objet detecte par le worker principal.'),
+    statusStep('candidate-search', 'Profil attendu dans le Top10 worker', worker.expectedRank ? 'ok' : 'mismatch', worker.expectedRank || 'absent', 'Le bon profil est absent des candidats du worker.'),
+    statusStep('worker-top1', 'Top1 worker', sameReference(worker.bestReference, expectedProfile.reference) ? 'ok' : 'mismatch', worker.bestReference || 'aucun', 'Le worker classe un autre profil en premier.')
   ];
 
   const firstMismatch = steps.find(step => step.status === 'mismatch');
   return {
     firstDivergence: firstMismatch?.key || 'aucune-divergence-majeure',
-    diagnostic: firstMismatch?.hint || 'Les bitmaps semblent proches. Le probleme est probablement dans la signature, le candidate-search ou le scoring.',
+    diagnostic: firstMismatch?.hint || 'Les bitmaps et le worker semblent coherents. Le probleme est probablement dans les ponderations fines ou un cas limite de scoring.',
+    hasMajorDivergence: Boolean(firstMismatch),
     uploaded,
     expected,
     profileGeometry,
+    expectedSignatureSummary,
     normalizedBboxComparison: normalized,
+    workerDiagnostics,
     steps
+  };
+}
+
+function summarizeStoredSignature(profile) {
+  const fingerprint = profile.fingerprint || profile.dna || {};
+  const descriptors = fingerprint.descriptors || profile.dna?.descriptors || {};
+  const minutiae = fingerprint.subsignatures?.minutiae || descriptors.minutiae || fingerprint.minutiae || {};
+  const localFeature = fingerprint.subsignatures?.localFeature || descriptors.localFeature || fingerprint.localFeature || {};
+  return {
+    pipelineMode: fingerprint.summary?.pipelineMode || null,
+    fillRatio: round(fingerprint.summary?.fillRatio),
+    radialBins: Array.isArray(descriptors.radial) ? descriptors.radial.length : null,
+    fourierTerms: Array.isArray(descriptors.fourier) ? descriptors.fourier.length : null,
+    angleBins: Array.isArray(descriptors.angle) ? descriptors.angle.length : null,
+    minutiaeCounts: minutiae.counts || null,
+    localFeatures: localFeature.features || null
   };
 }
 
@@ -132,6 +228,10 @@ function compareStep(key, label, uploadedValue, expectedValue, tolerance, hint) 
   const diff = numericDiff(uploadedValue, expectedValue);
   const status = diff === null ? 'unknown' : Math.abs(diff) <= tolerance ? 'ok' : 'mismatch';
   return { key, label, uploadedValue, expectedValue, difference: diff, tolerance, status, hint: status === 'mismatch' ? hint : null };
+}
+
+function statusStep(key, label, status, value, hint) {
+  return { key, label, uploadedValue: value, expectedValue: 'ok', difference: null, tolerance: null, status, hint: status === 'mismatch' ? hint : null };
 }
 
 function compareNormalizedBBoxes(uploadCanvas, expectedCanvas) {
@@ -340,6 +440,8 @@ function renderPipelineInspection(pipeline) {
   if (!stageInspector) return;
   stageInspector.innerHTML = '';
   addStageRow('Premiere divergence probable', pipeline.firstDivergence, pipeline.diagnostic);
+  addStageRow('Signature attendue stockee', 'info', JSON.stringify(pipeline.expectedSignatureSummary));
+  addStageRow('Worker Top10', 'info', JSON.stringify(pipeline.workerDiagnostics?.topCandidates?.map(candidate => ({ rank: candidate.rank, reference: candidate.reference, score: candidate.score })) || []));
   for (const step of pipeline.steps) {
     addStageRow(step.label, step.status, 'upload=' + step.uploadedValue + ' · attendu=' + step.expectedValue + ' · diff=' + step.difference + ' · tolerance=' + step.tolerance + (step.hint ? ' · ' + step.hint : ''));
   }
@@ -376,7 +478,7 @@ function downloadComparisonPng() {
   ctx.font = '18px sans-serif';
   ctx.fillText('Difference: ' + lastComparison.diffStats.differencePercent + '% · Similarite: ' + lastComparison.diffStats.similarityPercent + '%', 32, 690);
   ctx.fillText('Premiere divergence probable: ' + lastComparison.pipeline.firstDivergence + ' · ' + lastComparison.pipeline.diagnostic, 32, 722);
-  ctx.fillText('noir=commun · rouge=upload seul · bleu=attendu seul', 32, 754);
+  ctx.fillText('Top1 worker: ' + (lastComparison.pipeline.workerDiagnostics?.summary?.bestReference || 'aucun') + ' · rang attendu: ' + (lastComparison.pipeline.workerDiagnostics?.summary?.expectedRank || 'absent'), 32, 754);
   const link = document.createElement('a');
   link.href = canvas.toDataURL('image/png');
   link.download = 'profilscan-visual-compare-' + lastComparison.expectedReference + '-' + timestampForFile() + '.png';
@@ -446,5 +548,8 @@ function timestampForFile() {
 }
 
 function formatError(error) {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error && error.message) return error.message;
+  if (error?.message) return String(error.message);
+  if (error?.filename) return error.filename + ':' + (error.lineno || '?') + ' - ' + (error.message || 'Erreur script');
+  return String(error);
 }
