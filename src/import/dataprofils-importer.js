@@ -3,8 +3,8 @@ import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js'
 
 export async function importDataprofilsText(text, onProgress = () => {}, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  report(onProgress, 22, 'Extraction de la base', 'Lecture du tableau Profils');
-  const profiles = parseDataprofils(text);
+  report(onProgress, 22, 'Extraction de la base', 'Lecture de la base profils');
+  const { profiles, sourceFormat } = parseDataprofils(text);
 
   report(onProgress, 35, 'Validation des profils', `${profiles.length} profils trouves`);
   const validProfiles = [];
@@ -54,7 +54,7 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
   return {
     id: 'local-profils',
     name: 'Base profils locale',
-    source: 'dataprofils.js',
+    source: sourceFormat,
     importedAt: new Date().toISOString(),
     pipelineSettings: settings,
     stats: {
@@ -77,15 +77,23 @@ function yieldToBrowser() {
 }
 
 function parseDataprofils(text) {
-  const arrayText = extractArrayText(text);
-  const jsonText = toJsonLikeArray(arrayText);
+  const trimmed = String(text || '').trim();
+  const arrayText = looksLikeJson(trimmed) ? trimmed : extractArrayText(trimmed);
+  const jsonText = looksLikeJson(trimmed) ? trimmed : toJsonLikeArray(arrayText);
 
   try {
-    return JSON.parse(jsonText);
+    const parsed = JSON.parse(jsonText);
+    const profiles = Array.isArray(parsed) ? parsed : parsed.profiles;
+    if (!Array.isArray(profiles)) throw new Error('Le fichier doit contenir un tableau de profils.');
+    return { profiles, sourceFormat: looksLikeJson(trimmed) ? 'dataprofils.json' : 'dataprofils.js' };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Base profils illisible : ${message}`);
   }
+}
+
+function looksLikeJson(text) {
+  return text.startsWith('[') || text.startsWith('{');
 }
 
 function toJsonLikeArray(arrayText) {
@@ -159,25 +167,68 @@ function stripComments(text) {
 function extractArrayText(text) {
   const start = text.indexOf('[');
   const end = text.lastIndexOf(']');
-  if (start < 0 || end <= start) throw new Error('Tableau window.Profils introuvable.');
+  if (start < 0 || end <= start) throw new Error('Tableau profils introuvable.');
   return text.slice(start, end + 1);
 }
 
 function normalizeProfile(profile) {
-  const width = Number(profile.largeur);
-  const height = Number(profile.hauteur);
-  const svgPath = String(profile.paths || '').trim();
+  const reference = textValue(profile.ref ?? profile.reference);
+  const designation = textValue(profile.name ?? profile.designation);
+  const width = numberValue(profile.profileWidth ?? profile.largeur ?? profile.width);
+  const height = numberValue(profile.profileHeight ?? profile.hauteur ?? profile.height);
+  const svgPath = textValue(profile.path ?? profile.paths ?? profile.svgPath);
 
-  if (!profile.reference || !svgPath || !Number.isFinite(width) || !Number.isFinite(height) || height <= 0) return null;
+  if (!reference || !svgPath || !Number.isFinite(width) || !Number.isFinite(height) || height <= 0) return null;
 
   return {
-    reference: String(profile.reference),
-    designation: String(profile.designation || ''),
+    reference,
+    designation,
+    line: nullableText(profile.line ?? profile.ligne),
+    config: nullableText(profile.config),
+    oldRef: nullableText(profile.oldRef ?? profile.ancienneRef),
+    finish: nullableText(profile.finish ?? profile.coloris),
     width,
     height,
     ratio: width / height,
-    surface: Number(profile.surface) || 0,
-    perimeter: Number(profile.perimetreExt) || 0,
-    svgPath
+    surface: numberValue(profile.area ?? profile.surface),
+    weight: numberValue(profile.weight ?? profile.poids),
+    perimeter: numberValue(profile.externalPerimeter ?? profile.perimetreExt),
+    externalPerimeter: numberValue(profile.externalPerimeter ?? profile.perimetreExt),
+    internalPerimeter: nullableNumber(profile.internalPerimeter ?? profile.perimetreInt),
+    totalPerimeter: numberValue(profile.totalPerimeter ?? profile.perimetreTotal),
+    inertiaIxx: numberValue(profile.inertiaIxx ?? profile.momentInertieIxx),
+    inertiaIyy: numberValue(profile.inertiaIyy ?? profile.momentInertieIyy),
+    sectionModulusIxV: numberValue(profile.sectionModulusIxV ?? profile.moduleFlexionIxV),
+    sectionModulusIyV: numberValue(profile.sectionModulusIyV ?? profile.moduleFlexionIyV),
+    circumscribedDiameter: nullableNumber(profile.circumscribedDiameter ?? profile.diametreCirconscrit),
+    profileDiagonal: numberValue(profile.profileDiagonal ?? profile.diagonale),
+    svgPath,
+    raw: profile
   };
+}
+
+function textValue(value) {
+  return String(value ?? '').trim();
+}
+
+function nullableText(value) {
+  const text = textValue(value);
+  return text || null;
+}
+
+function numberValue(value) {
+  const number = parseNumericValue(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function nullableNumber(value) {
+  const number = parseNumericValue(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function parseNumericValue(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
+  if (value === null || value === undefined || value === '-') return NaN;
+  const match = String(value).replace(',', '.').match(/[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/);
+  return match ? Number(match[0]) : NaN;
 }
