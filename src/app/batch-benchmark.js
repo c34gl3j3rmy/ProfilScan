@@ -69,10 +69,10 @@ async function runBenchmark(fileList) {
   }
 
   const report = buildBenchmarkReport({ startedAt, files, results, errors, collection });
-  saveJsonFile(report, 'profilscan-benchmark-' + timestampForFile() + '.json');
+  saveJsonFile(report, 'profilscan-benchmark-summary-' + timestampForFile() + '.json');
   const bestPreset = report.weightPresetBenchmark && report.weightPresetBenchmark[0];
   const bestText = bestPreset ? ' - meilleur preset ' + bestPreset.name + ' : ' + bestPreset.top1Accuracy + '% Top 1' : '';
-  setProgress(100, 'Benchmark termine', results.length + ' images analysees - ' + report.summary.top1Accuracy + '% Top 1 - ' + report.summary.top3Accuracy + '% Top 3' + bestText + ' - rapport genere', 'done');
+  setProgress(100, 'Benchmark termine', results.length + ' images analysees - ' + report.summary.top1Accuracy + '% Top 1 - ' + report.summary.top3Accuracy + '% Top 3' + bestText + ' - rapport leger genere', 'done');
   setBenchmarkStatus('Benchmark termine : ' + report.summary.top1Accuracy + '% Top 1 - meilleur preset ' + (bestPreset?.top1Accuracy ?? '-') + '%');
 }
 
@@ -147,7 +147,9 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
     contours: analysis.debug?.contours?.length || 0,
     holes: (analysis.debug?.contours || []).reduce((sum, contour) => sum + (contour.holes?.length || 0), 0),
     segmentationMode: analysis.debug?.segmentationMode || null,
-    segmentation: analysis.debug?.segmentation || null,
+    segmentation: summarizeSegmentation(analysis.debug?.segmentation),
+    detectionDiagnostics: buildDetectionDiagnostics(analysis, autoSettings),
+    geometryDiagnostics: buildGeometryDiagnostics(expectedProfile, best, expectedCandidate),
     autoSettings,
     settings,
     bestScoreDetails: best?.scoreDetails || null,
@@ -159,26 +161,31 @@ function summarizeImageResult(file, expectedReference, autoSettings, settings, a
       scoreDetails: expectedCandidate.scoreDetails
     } : null,
     algorithmAudit: buildAlgorithmAudit(best, expectedCandidate),
-    topCandidates
+    algorithmRanks: buildAlgorithmRanks(topCandidates, expectedReference, best?.reference),
+    algorithmVotes: buildAlgorithmVotes(topCandidates, expectedReference, best?.reference),
+    topCandidates: summarizeTopCandidates(topCandidates)
   };
 }
 
 function buildBenchmarkReport({ startedAt, files, results, errors, collection }) {
+  const failureSummary = summarizeFailures(results);
   return {
-    type: 'ProfilScan batch benchmark report',
-    version: 'batch-benchmark-v5',
+    type: 'ProfilScan batch benchmark summary report',
+    version: 'batch-benchmark-summary-v1',
     startedAt,
     completedAt: new Date().toISOString(),
     input: { mode: 'multi-image-files', files: files.length, expectedReferenceRule: 'nom exact du fichier sans extension', svgMode: 'shared-rasterizer-before-analysis' },
     base: { name: collection?.name, profiles: collection?.profiles?.length, importedAt: collection?.importedAt, pipelineSettings: collection?.pipelineSettings },
     summary: summarizeBenchmark(results, errors),
-    failureSummary: summarizeFailures(results),
-    algorithmStats: summarizeAlgorithms(results),
+    noDetectionDetails: summarizeNoDetections(results),
+    failureSummary,
+    algorithmEffectiveness: summarizeAlgorithmEffectiveness(results),
+    algorithmVotes: summarizeGlobalAlgorithmVotes(results),
     weightPresetBenchmark: buildWeightPresetBenchmark(results),
     confusionMatrix: buildConfusionMatrix(results),
     confusionFamilies: buildConfusionFamilies(results),
-    errors,
-    results
+    debugSamples: buildDebugSamples(results),
+    errors
   };
 }
 
@@ -207,6 +214,25 @@ function summarizeBenchmark(results, errors) {
   };
 }
 
+function summarizeNoDetections(results) {
+  return results
+    .filter(result => !result.detectedItems)
+    .map(result => ({
+      fileName: result.fileName,
+      expectedReference: result.expectedReference,
+      expectedKnownInBase: result.expectedKnownInBase,
+      source: result.autoSettings?.source || null,
+      autoSettings: pickAutoSettings(result.autoSettings),
+      contours: result.contours,
+      holes: result.holes,
+      segmentationMode: result.segmentationMode,
+      segmentation: result.segmentation,
+      detectionDiagnostics: result.detectionDiagnostics,
+      expectedGeometry: result.geometryDiagnostics?.expected || null,
+      probableReason: guessFailureReason(result)
+    }));
+}
+
 function summarizeFailures(results) {
   const failed = results.filter(result => result.expectedKnownInBase && !result.success);
   return {
@@ -224,19 +250,241 @@ function summarizeFailedProfile(result) {
     expectedRank: result.expectedRank,
     bestScore: result.bestScore,
     expectedScore: result.expectedCandidate?.score ?? null,
+    scoreGap: round((result.bestScore ?? 0) - (result.expectedCandidate?.score ?? 0)),
     expectedWins: result.algorithmAudit?.expectedWins || [],
-    bestWins: result.algorithmAudit?.bestWins || []
+    bestWins: result.algorithmAudit?.bestWins || [],
+    algorithmRanks: result.algorithmRanks,
+    algorithmVotes: result.algorithmVotes,
+    geometryDiagnostics: result.geometryDiagnostics,
+    detectionDiagnostics: result.detectionDiagnostics,
+    topCandidates: result.topCandidates,
+    probableReason: guessFailureReason(result)
   };
 }
 
-function summarizeAlgorithms(results) {
+function summarizeAlgorithmEffectiveness(results) {
   return ALGORITHM_KEYS.map(key => {
     const rows = results.map(result => result.algorithmAudit?.rows?.find(row => row.key === key)).filter(Boolean);
     const usableRows = rows.filter(row => Number.isFinite(row.delta));
     const expectedWins = usableRows.filter(row => row.delta > 0).length;
     const bestWins = usableRows.filter(row => row.delta < 0).length;
-    return { key, samples: usableRows.length, expectedWins, bestWins, neutral: usableRows.filter(row => row.delta === 0).length, averageDelta: average(usableRows.map(row => row.delta)), reliabilityHint: expectedWins - bestWins };
-  }).sort((a, b) => b.reliabilityHint - a.reliabilityHint);
+    const neutral = usableRows.filter(row => row.delta === 0).length;
+    const averageDelta = average(usableRows.map(row => row.delta));
+    const samples = usableRows.length;
+    const score = samples ? clamp(round(50 + ((expectedWins - bestWins) / samples) * 35 + clamp(averageDelta || 0, -25, 25) * 0.6), 0, 100) : null;
+    return {
+      key,
+      samples,
+      expectedWins,
+      bestWins,
+      neutral,
+      averageDelta,
+      effectivenessScore: score,
+      recommendation: algorithmRecommendation(score, samples, expectedWins, bestWins, averageDelta)
+    };
+  }).sort((a, b) => (b.effectivenessScore ?? -1) - (a.effectivenessScore ?? -1));
+}
+
+function summarizeGlobalAlgorithmVotes(results) {
+  return ALGORITHM_KEYS.map(key => {
+    const votes = { expected: 0, currentTop1: 0, other: 0, none: 0 };
+    const winners = new Map();
+    for (const result of results.filter(item => item.expectedKnownInBase && !item.success)) {
+      const vote = result.algorithmVotes?.perAlgorithm?.find(row => row.key === key);
+      if (!vote?.winnerReference) votes.none++;
+      else if (sameReference(vote.winnerReference, result.expectedReference)) votes.expected++;
+      else if (sameReference(vote.winnerReference, result.bestReference)) votes.currentTop1++;
+      else votes.other++;
+      if (vote?.winnerReference) winners.set(vote.winnerReference, (winners.get(vote.winnerReference) || 0) + 1);
+    }
+    return { key, votes, topWinners: Array.from(winners.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([reference, count]) => ({ reference, count })) };
+  });
+}
+
+function buildAlgorithmRanks(topCandidates, expectedReference, bestReference) {
+  return ALGORITHM_KEYS.map(key => {
+    const ranked = topCandidates
+      .map(candidate => ({ reference: candidate.reference, score: scoreValue(candidate, key) }))
+      .filter(candidate => Number.isFinite(candidate.score))
+      .sort((a, b) => b.score - a.score);
+    const expectedRank = ranked.findIndex(candidate => sameReference(candidate.reference, expectedReference)) + 1 || null;
+    const bestRank = ranked.findIndex(candidate => sameReference(candidate.reference, bestReference)) + 1 || null;
+    return {
+      key,
+      winnerReference: ranked[0]?.reference || null,
+      winnerScore: ranked[0]?.score ?? null,
+      expectedRank,
+      bestRank,
+      expectedScore: ranked.find(candidate => sameReference(candidate.reference, expectedReference))?.score ?? null,
+      bestScore: ranked.find(candidate => sameReference(candidate.reference, bestReference))?.score ?? null
+    };
+  });
+}
+
+function buildAlgorithmVotes(topCandidates, expectedReference, bestReference) {
+  const perAlgorithm = buildAlgorithmRanks(topCandidates, expectedReference, bestReference).map(row => ({
+    key: row.key,
+    winnerReference: row.winnerReference,
+    expectedRank: row.expectedRank,
+    bestRank: row.bestRank,
+    vote: !row.winnerReference ? 'none' : sameReference(row.winnerReference, expectedReference) ? 'expected' : sameReference(row.winnerReference, bestReference) ? 'currentTop1' : 'other'
+  }));
+  const counts = perAlgorithm.reduce((acc, row) => {
+    acc[row.vote] = (acc[row.vote] || 0) + 1;
+    return acc;
+  }, {});
+  return { counts, perAlgorithm };
+}
+
+function buildAlgorithmAudit(best, expectedCandidate) {
+  const rows = ALGORITHM_KEYS.map(key => {
+    const bestScore = scoreValue(best, key);
+    const expectedScore = scoreValue(expectedCandidate, key);
+    const delta = Number.isFinite(expectedScore) && Number.isFinite(bestScore) ? round(expectedScore - bestScore) : null;
+    return { key, bestScore, expectedScore, delta, verdict: algorithmVerdict(delta) };
+  });
+  return { expectedFound: Boolean(expectedCandidate), rows, expectedWins: rows.filter(row => Number(row.delta) > 0).map(row => row.key), bestWins: rows.filter(row => Number(row.delta) < 0).map(row => row.key) };
+}
+
+function buildGeometryDiagnostics(expectedProfile, best, expectedCandidate) {
+  const expected = buildProfileGeometry(expectedProfile);
+  const bestGeometry = buildCandidateGeometry(best);
+  const expectedCandidateGeometry = buildCandidateGeometry(expectedCandidate);
+  return {
+    expected,
+    best: bestGeometry,
+    expectedCandidate: expectedCandidateGeometry,
+    deltas: {
+      expectedVsBestRatio: delta(expected?.ratio, bestGeometry?.ratio),
+      expectedVsBestCompactness: delta(expected?.compactness, bestGeometry?.compactness),
+      expectedVsBestFillRatio: delta(expected?.fillRatio, bestGeometry?.fillRatio),
+      expectedVsBestContourDensity: delta(expected?.contourDensity, bestGeometry?.contourDensity),
+      expectedVsExpectedCandidateScore: delta(best?.score, expectedCandidate?.score)
+    }
+  };
+}
+
+function buildProfileGeometry(profile) {
+  if (!profile) return null;
+  const width = Number(profile.width);
+  const height = Number(profile.height);
+  const area = Number(profile.surface || profile.area);
+  const perimeter = Number(profile.perimeter || profile.externalPerimeter || profile.totalPerimeter);
+  const diagonal = Number(profile.profileDiagonal || Math.hypot(width || 0, height || 0));
+  const fingerprint = profile.fingerprint || profile.dna;
+  return {
+    reference: profile.reference,
+    width: round(width),
+    height: round(height),
+    ratio: Number.isFinite(width / height) ? round(width / height) : null,
+    area: round(area),
+    perimeter: round(perimeter),
+    compactness: round(area / ((width || 0) * (height || 0))),
+    contourDensity: round(perimeter / (diagonal || 1)),
+    fillRatio: round(fingerprint?.summary?.fillRatio),
+    symmetryX: round(symmetryScore(getFingerprintPoints(fingerprint), 'x')),
+    symmetryY: round(symmetryScore(getFingerprintPoints(fingerprint), 'y')),
+    localComplexity: summarizeLocalComplexity(fingerprint)
+  };
+}
+
+function buildCandidateGeometry(candidate) {
+  if (!candidate) return null;
+  const fingerprint = candidate.fingerprint || candidate.dna || candidate;
+  return {
+    reference: candidate.reference,
+    score: round(candidate.score),
+    ratio: round(candidate.summary?.ratio ?? candidate.dimensions?.ratio),
+    fillRatio: round(candidate.summary?.fillRatio),
+    compactness: round(candidate.summary?.surface && candidate.summary?.width && candidate.summary?.height ? candidate.summary.surface / (candidate.summary.width * candidate.summary.height) : null),
+    contourDensity: round(candidate.summary?.perimeter && candidate.summary?.width && candidate.summary?.height ? candidate.summary.perimeter / Math.hypot(candidate.summary.width, candidate.summary.height) : null),
+    symmetryX: round(symmetryScore(getFingerprintPoints(fingerprint), 'x')),
+    symmetryY: round(symmetryScore(getFingerprintPoints(fingerprint), 'y')),
+    localComplexity: summarizeLocalComplexity(fingerprint)
+  };
+}
+
+function summarizeLocalComplexity(fingerprint) {
+  const minutiae = fingerprint?.subsignatures?.minutiae || fingerprint?.descriptors?.minutiae || fingerprint?.minutiae;
+  const localFeature = fingerprint?.subsignatures?.localFeature || fingerprint?.descriptors?.localFeature || fingerprint?.localFeature;
+  return {
+    corners: numberOrNull(minutiae?.counts?.corners),
+    segments: numberOrNull(minutiae?.counts?.segments),
+    terminations: numberOrNull(minutiae?.counts?.terminations),
+    bifurcations: numberOrNull(minutiae?.counts?.bifurcations),
+    grooves: numberOrNull(localFeature?.features?.grooves),
+    hooks: numberOrNull(localFeature?.features?.hooks),
+    notches: numberOrNull(localFeature?.features?.notches),
+    lips: numberOrNull(localFeature?.features?.lips),
+    sharpTips: numberOrNull(localFeature?.features?.sharpTips),
+    longStraights: numberOrNull(localFeature?.features?.longStraights)
+  };
+}
+
+function getFingerprintPoints(fingerprint) {
+  return fingerprint?.descriptors?.points || fingerprint?.subsignatures?.points || fingerprint?.contour?.normalizedPoints || [];
+}
+
+function symmetryScore(points, axis) {
+  if (!Array.isArray(points) || points.length < 8) return null;
+  const sample = points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)).slice(0, 240);
+  if (sample.length < 8) return null;
+  const distances = sample.map(point => {
+    const mirror = axis === 'x' ? { x: -point.x, y: point.y } : { x: point.x, y: -point.y };
+    return Math.min(...sample.map(other => Math.hypot(other.x - mirror.x, other.y - mirror.y)));
+  });
+  const averageDistance = distances.reduce((sum, value) => sum + value, 0) / distances.length;
+  return clamp(100 * (1 - averageDistance / 0.35), 0, 100);
+}
+
+function buildDetectionDiagnostics(analysis, autoSettings) {
+  const contours = analysis.debug?.contours || [];
+  const largestContour = contours
+    .map(contour => ({ area: numberOrNull(contour.area), points: contour.points?.length || contour.length || 0, holes: contour.holes?.length || 0 }))
+    .sort((a, b) => (b.area || 0) - (a.area || 0))[0] || null;
+  return {
+    source: autoSettings?.source || null,
+    contours: contours.length,
+    largestContour,
+    detectedItems: analysis.items?.length || 0,
+    segmentationMode: analysis.debug?.segmentationMode || null
+  };
+}
+
+function summarizeSegmentation(segmentation) {
+  if (!segmentation) return null;
+  return {
+    mode: segmentation.mode || null,
+    components: numberOrNull(segmentation.components),
+    keptComponents: numberOrNull(segmentation.keptComponents),
+    rejectedComponents: numberOrNull(segmentation.rejectedComponents),
+    threshold: numberOrNull(segmentation.threshold),
+    edgePixels: numberOrNull(segmentation.edgePixels),
+    filledPixels: numberOrNull(segmentation.filledPixels)
+  };
+}
+
+function summarizeTopCandidates(topCandidates) {
+  return topCandidates.map(candidate => ({ rank: candidate.rank, reference: candidate.reference, designation: candidate.designation, score: candidate.score }));
+}
+
+function buildDebugSamples(results) {
+  return results
+    .filter(result => !result.success || !result.detectedItems)
+    .slice(0, 12)
+    .map(result => ({
+      fileName: result.fileName,
+      expectedReference: result.expectedReference,
+      bestReference: result.bestReference,
+      expectedRank: result.expectedRank,
+      bestScore: result.bestScore,
+      expectedScore: result.expectedCandidate?.score ?? null,
+      algorithmAudit: result.algorithmAudit,
+      algorithmVotes: result.algorithmVotes,
+      geometryDiagnostics: result.geometryDiagnostics,
+      detectionDiagnostics: result.detectionDiagnostics,
+      topCandidates: result.topCandidates
+    }));
 }
 
 function buildConfusionMatrix(results) {
@@ -272,16 +520,6 @@ function familyKey(reference) {
   return value.match(/^[A-Z]+\d{0,2}/)?.[0] || value.match(/^\d{2,3}/)?.[0] || value.slice(0, 3);
 }
 
-function buildAlgorithmAudit(best, expectedCandidate) {
-  const rows = ALGORITHM_KEYS.map(key => {
-    const bestScore = scoreValue(best, key);
-    const expectedScore = scoreValue(expectedCandidate, key);
-    const delta = Number.isFinite(expectedScore) && Number.isFinite(bestScore) ? round(expectedScore - bestScore) : null;
-    return { key, bestScore, expectedScore, delta, verdict: algorithmVerdict(delta) };
-  });
-  return { expectedFound: Boolean(expectedCandidate), rows, expectedWins: rows.filter(row => Number(row.delta) > 0).map(row => row.key), bestWins: rows.filter(row => Number(row.delta) < 0).map(row => row.key) };
-}
-
 function findExpectedCandidate(analysis, expectedReference) {
   for (const [itemIndex, item] of (analysis.items || []).entries()) {
     const candidateIndex = item.topCandidates?.findIndex(candidate => sameReference(candidate.reference, expectedReference)) ?? -1;
@@ -308,6 +546,37 @@ function algorithmVerdict(delta) {
   return 'neutral';
 }
 
+function algorithmRecommendation(score, samples, expectedWins, bestWins, averageDelta) {
+  if (!samples) return 'insufficient-data';
+  if (score >= 68 && expectedWins > bestWins) return 'increase';
+  if (score <= 38 && bestWins > expectedWins) return 'reduce';
+  if (score <= 28 && (averageDelta || 0) < -8) return 'disable';
+  return 'neutral';
+}
+
+function guessFailureReason(result) {
+  if (!result.expectedKnownInBase) return 'reference-absente';
+  if (!result.detectedItems) return 'no-detection';
+  if (!result.expectedCandidate) return 'expected-outside-top10';
+  if (result.algorithmAudit?.bestWins?.includes('ratio') || result.algorithmAudit?.bestWins?.includes('ratioGate')) return 'ratio-conflict';
+  if (result.algorithmAudit?.bestWins?.includes('localFeature') || result.algorithmAudit?.bestWins?.includes('minutiae')) return 'local-confusion';
+  if (familyKey(result.expectedReference) === familyKey(result.bestReference)) return 'family-confusion';
+  return 'scoring-fusion-issue';
+}
+
+function pickAutoSettings(autoSettings) {
+  if (!autoSettings) return null;
+  return {
+    brightness: autoSettings.brightness,
+    contrast: autoSettings.contrast,
+    edgeQuantile: autoSettings.edgeQuantile,
+    linkRadius: autoSettings.linkRadius,
+    minArea: autoSettings.minArea,
+    mergeGap: autoSettings.mergeGap,
+    source: autoSettings.source
+  };
+}
+
 function referenceFromFilename(fileName) {
   const dot = fileName.lastIndexOf('.');
   return (dot > 0 ? fileName.slice(0, dot) : fileName).trim().replace(/\.min$/i, '');
@@ -325,6 +594,21 @@ function average(values) {
 
 function percent(value, total) {
   return total > 0 ? round((value / total) * 100) : 0;
+}
+
+function delta(a, b) {
+  const first = Number(a);
+  const second = Number(b);
+  return Number.isFinite(first) && Number.isFinite(second) ? round(first - second) : null;
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? round(number) : null;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function round(value) {
