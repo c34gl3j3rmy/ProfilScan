@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProfilScan - Comparateur de pipeline</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color-scheme: light dark; }
+    body { margin: 0; padding: 24px; background: #f4f6f8; color: #17202a; }
+    main { max-width: 1360px; margin: 0 auto; display: grid; gap: 18px; }
+    .card { background: #fff; border: 1px solid #d9e0e7; border-radius: 14px; padding: 18px; box-shadow: 0 8px 24px rgba(15, 23, 42, .08); }
+    h1, h2, h3 { margin: 0 0 10px; }
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: end; }
+    label { display: grid; gap: 6px; font-weight: 650; }
+    input, button { font: inherit; border-radius: 10px; border: 1px solid #cbd5df; padding: 10px 12px; background: #fff; color: inherit; }
+    button { cursor: pointer; font-weight: 700; background: #14213d; color: white; border: 0; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+    .stage { display: grid; gap: 10px; }
+    canvas { width: 100%; background: #fff; border: 1px solid #cbd5df; border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 7px 6px; vertical-align: top; }
+    .warn { color: #9a3412; font-weight: 700; }
+    .ok { color: #166534; font-weight: 700; }
+    .status { color: #4b5563; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0f172a; color: #e5e7eb; }
+      .card { background: #111827; border-color: #334155; }
+      input { background: #0f172a; border-color: #475569; }
+      canvas { background: #fff; }
+      th, td { border-bottom-color: #334155; }
+      .status { color: #cbd5e1; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Comparateur de pipeline</h1>
+      <p>Compare côte à côte l'image uploadée et le profil attendu, tous deux passés dans le même worker de reconnaissance.</p>
+      <div class="controls">
+        <label>Fichier image ou SVG
+          <input id="fileInput" type="file" accept="image/*,.svg">
+        </label>
+        <label>Référence attendue
+          <input id="referenceInput" placeholder="Déduit du nom du fichier">
+        </label>
+        <button id="runButton" type="button">Comparer</button>
+      </div>
+      <p id="status" class="status">Importer d'abord dataprofils.json dans ProfilScan.</p>
+    </section>
+
+    <section class="two">
+      <article class="card stage">
+        <h2>Image uploadée</h2>
+        <canvas id="uploadOriginalCanvas" width="900" height="640"></canvas>
+        <canvas id="uploadContourCanvas" width="900" height="640"></canvas>
+        <table id="uploadTable"></table>
+      </article>
+      <article class="card stage">
+        <h2>Profil attendu</h2>
+        <canvas id="expectedOriginalCanvas" width="900" height="640"></canvas>
+        <canvas id="expectedContourCanvas" width="900" height="640"></canvas>
+        <table id="expectedTable"></table>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Comparaison synthétique</h2>
+      <table id="compareTable"></table>
+    </section>
+  </main>
+  <script type="module" src="./src/app/pipeline-compare.js"></script>
+</body>
+</html>
