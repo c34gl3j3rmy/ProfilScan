@@ -204,7 +204,7 @@ function scaleDetectedObject(object, scale) {
 
 function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items }) {
   return {
-    version: '1.1',
+    version: '1.2',
     source: {
       width: imageBitmap.width,
       height: imageBitmap.height,
@@ -285,8 +285,38 @@ function summarizeFingerprint(fingerprint) {
       points: descriptors.points?.length || 0,
       minutiae: summarizeDescriptorObject(descriptors.minutiae),
       localFeature: summarizeDescriptorObject(descriptors.localFeature)
+    },
+    visualDescriptors: {
+      radial: copyNumericArray(descriptors.radial, 128),
+      angleHistogram: copyNumericArray(descriptors.angleHistogram, 128),
+      hu: copyNumericArray(descriptors.hu, 16),
+      fourier: copyNumericArray(descriptors.fourier, 128),
+      values: copyNumericArray(fingerprint.values, 256),
+      normalizedPoints: samplePoints(fingerprint.contour?.normalizedPoints || descriptors.points || [], 256)
     }
   };
+}
+
+function copyNumericArray(value, maxLength) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, maxLength).map(entry => Number.isFinite(Number(entry)) ? Math.round(Number(entry) * 1000000) / 1000000 : null);
+}
+
+function samplePoints(points, maxPoints) {
+  if (!Array.isArray(points) || !points.length) return [];
+  const step = Math.max(1, Math.ceil(points.length / maxPoints));
+  const output = [];
+  for (let i = 0; i < points.length; i += step) {
+    const point = points[i];
+    if (Array.isArray(point)) output.push({ x: roundNumber(point[0]), y: roundNumber(point[1]) });
+    else output.push({ x: roundNumber(point.x), y: roundNumber(point.y) });
+  }
+  return output;
+}
+
+function roundNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 1000000) / 1000000 : null;
 }
 
 function summarizeDescriptorObject(value) {
