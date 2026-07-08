@@ -16,6 +16,7 @@ const expectedStats = document.querySelector('#expectedStats');
 const diffStats = document.querySelector('#diffStats');
 
 let lastComparison = null;
+const stageInspector = createStageInspector();
 
 compareButton?.addEventListener('click', runVisualComparison);
 downloadButton?.addEventListener('click', downloadComparisonPng);
@@ -43,23 +44,35 @@ async function runVisualComparison() {
     const expectedProfile = collection.profiles.find(profile => sameReference(profile.reference, expectedReference));
     if (!expectedProfile) throw new Error('Reference attendue introuvable dans la base : ' + expectedReference);
 
-    setStatus('Rasterisation du fichier uploadé...');
+    setStatus('Rasterisation du fichier uploade...');
     const uploadedBitmap = await loadImageFile(file);
 
     setStatus('Rasterisation du profil attendu depuis dataprofils.json...');
     const expectedBitmap = await renderProfileBitmap(expectedProfile);
 
-    const uploaded = drawBitmapToCanvas(uploadedBitmap, uploadedCanvas, 'Image uploadée');
+    const uploaded = drawBitmapToCanvas(uploadedBitmap, uploadedCanvas, 'Image uploadee');
     const expected = drawBitmapToCanvas(expectedBitmap, expectedCanvas, 'Profil attendu');
     const diff = drawDiff(uploadedCanvas, expectedCanvas, diffCanvas);
+    const pipeline = buildPipelineInspection(uploadedCanvas, expectedCanvas, expectedProfile, diff.stats);
 
     renderStats(uploadedStats, uploaded.stats);
     renderStats(expectedStats, expected.stats);
-    renderStats(diffStats, diff.stats);
+    renderStats(diffStats, { ...diff.stats, firstDivergence: pipeline.firstDivergence, diagnostic: pipeline.diagnostic });
+    renderPipelineInspection(pipeline);
 
-    lastComparison = { fileName: file.name, expectedReference, uploadedCanvas, expectedCanvas, diffCanvas, uploadedStats: uploaded.stats, expectedStats: expected.stats, diffStats: diff.stats };
+    lastComparison = {
+      fileName: file.name,
+      expectedReference,
+      uploadedCanvas,
+      expectedCanvas,
+      diffCanvas,
+      uploadedStats: uploaded.stats,
+      expectedStats: expected.stats,
+      diffStats: diff.stats,
+      pipeline
+    };
     downloadButton.disabled = false;
-    setStatus('Comparaison prête : ' + file.name + ' vs ' + expectedReference + '.', diff.stats.differencePercent > 8);
+    setStatus('Comparaison prete : ' + file.name + ' vs ' + expectedReference + ' - divergence probable : ' + pipeline.firstDivergence + '.', diff.stats.differencePercent > 8);
   } catch (error) {
     setStatus(formatError(error), true);
   } finally {
@@ -78,6 +91,73 @@ function buildProfileSvg(profile) {
   const path = String(profile.svgPath || profile.raw?.path || '').trim();
   if (!path) throw new Error('Profil sans chemin SVG exploitable : ' + profile.reference);
   return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height + '"><path d="' + escapeAttribute(path) + '" fill="#000" stroke="#000" stroke-width="0.12" fill-rule="evenodd" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+}
+
+function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, diffStats) {
+  const uploaded = analyzeCanvas(uploadCanvas);
+  const expected = analyzeCanvas(expectedCanvas);
+  const normalized = compareNormalizedBBoxes(uploadCanvas, expectedCanvas);
+  const profileGeometry = {
+    reference: expectedProfile.reference,
+    width: round(expectedProfile.width),
+    height: round(expectedProfile.height),
+    ratio: round(expectedProfile.width / expectedProfile.height),
+    surface: round(expectedProfile.surface),
+    perimeter: round(expectedProfile.perimeter)
+  };
+
+  const steps = [
+    compareStep('raster-size', 'Dimensions ImageBitmap', uploaded.sourceWidth || uploaded.width, expected.sourceWidth || expected.width, 4, 'Verifier viewBox, marge et rasterisation SVG.'),
+    compareStep('canvas-ratio', 'Ratio canvas', uploaded.ratio, expected.ratio, 0.02, 'Verifier orientation, viewBox et normalisation.'),
+    compareStep('dark-percent', 'Pourcentage pixels noirs', uploaded.darkPercent, expected.darkPercent, 1.5, 'Verifier fill-rule, trait, remplissage et seuil de binarisation.'),
+    compareStep('bbox-ratio', 'Ratio bbox noire', uploaded.bbox?.ratio, expected.bbox?.ratio, 0.03, 'Verifier bbox, rotation, centrage et marge.'),
+    compareStep('bbox-fill', 'Remplissage bbox', bboxFill(uploaded), bboxFill(expected), 0.04, 'Verifier contour ferme, trous et remplissage.'),
+    compareStep('normalized-diff', 'Difference apres normalisation bbox', normalized.differencePercent, 0, 5, 'Les formes comparees ne se superposent pas assez apres alignement.'),
+    compareStep('final-diff', 'Difference visuelle finale', diffStats.differencePercent, 0, 5, 'La divergence est visible sur les bitmaps finaux.')
+  ];
+
+  const firstMismatch = steps.find(step => step.status === 'mismatch');
+  return {
+    firstDivergence: firstMismatch?.key || 'aucune-divergence-majeure',
+    diagnostic: firstMismatch?.hint || 'Les bitmaps semblent proches. Le probleme est probablement dans la signature, le candidate-search ou le scoring.',
+    uploaded,
+    expected,
+    profileGeometry,
+    normalizedBboxComparison: normalized,
+    steps
+  };
+}
+
+function compareStep(key, label, uploadedValue, expectedValue, tolerance, hint) {
+  const diff = numericDiff(uploadedValue, expectedValue);
+  const status = diff === null ? 'unknown' : Math.abs(diff) <= tolerance ? 'ok' : 'mismatch';
+  return { key, label, uploadedValue, expectedValue, difference: diff, tolerance, status, hint: status === 'mismatch' ? hint : null };
+}
+
+function compareNormalizedBBoxes(uploadCanvas, expectedCanvas) {
+  const size = 512;
+  const left = cropToBbox(uploadCanvas, size);
+  const right = cropToBbox(expectedCanvas, size);
+  const diff = compareMasks(canvasMask(left), canvasMask(right));
+  return { size, ...diff };
+}
+
+function cropToBbox(sourceCanvas, size) {
+  const stats = analyzeCanvas(sourceCanvas);
+  const target = document.createElement('canvas');
+  target.width = size;
+  target.height = size;
+  const ctx = target.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  if (!stats.bbox) return target;
+  const margin = 24;
+  const scale = Math.min((size - margin * 2) / stats.bbox.width, (size - margin * 2) / stats.bbox.height);
+  const drawWidth = stats.bbox.width * scale;
+  const drawHeight = stats.bbox.height * scale;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(sourceCanvas, stats.bbox.x, stats.bbox.y, stats.bbox.width, stats.bbox.height, (size - drawWidth) / 2, (size - drawHeight) / 2, drawWidth, drawHeight);
+  return target;
 }
 
 function drawBitmapToCanvas(bitmap, canvas, label) {
@@ -109,58 +189,57 @@ function drawDiff(uploaded, expected, output) {
 
   const left = normalizedMask(uploaded, width, height);
   const right = normalizedMask(expected, width, height);
+  const diff = compareMasks(left, right);
   const image = ctx.createImageData(width, height);
-  let common = 0;
-  let onlyUpload = 0;
-  let onlyExpected = 0;
-  let empty = 0;
 
   for (let i = 0; i < left.length; i++) {
     const a = left[i];
     const b = right[i];
     const offset = i * 4;
-    if (a && b) {
-      common++;
-      image.data[offset] = 0;
-      image.data[offset + 1] = 0;
-      image.data[offset + 2] = 0;
-      image.data[offset + 3] = 255;
-    } else if (a) {
-      onlyUpload++;
-      image.data[offset] = 220;
-      image.data[offset + 1] = 38;
-      image.data[offset + 2] = 38;
-      image.data[offset + 3] = 255;
-    } else if (b) {
-      onlyExpected++;
-      image.data[offset] = 37;
-      image.data[offset + 1] = 99;
-      image.data[offset + 2] = 235;
-      image.data[offset + 3] = 255;
-    } else {
-      empty++;
-      image.data[offset] = 255;
-      image.data[offset + 1] = 255;
-      image.data[offset + 2] = 255;
-      image.data[offset + 3] = 255;
-    }
+    if (a && b) setPixel(image.data, offset, 0, 0, 0);
+    else if (a) setPixel(image.data, offset, 220, 38, 38);
+    else if (b) setPixel(image.data, offset, 37, 99, 235);
+    else setPixel(image.data, offset, 255, 255, 255);
   }
 
   ctx.putImageData(image, 0, 0);
-  const union = common + onlyUpload + onlyExpected;
   const stats = {
-    label: 'Différence visuelle',
+    label: 'Difference visuelle',
     width,
     height,
+    commonPixels: diff.commonPixels,
+    onlyUploadPixels: diff.onlyUploadPixels,
+    onlyExpectedPixels: diff.onlyExpectedPixels,
+    emptyPixels: diff.emptyPixels,
+    similarityPercent: diff.similarityPercent,
+    differencePercent: diff.differencePercent,
+    legend: 'noir=commun, rouge=upload seul, bleu=attendu seul'
+  };
+  return { canvas: output, stats };
+}
+
+function compareMasks(left, right) {
+  let common = 0;
+  let onlyUpload = 0;
+  let onlyExpected = 0;
+  let empty = 0;
+  for (let i = 0; i < left.length; i++) {
+    const a = left[i];
+    const b = right[i];
+    if (a && b) common++;
+    else if (a) onlyUpload++;
+    else if (b) onlyExpected++;
+    else empty++;
+  }
+  const union = common + onlyUpload + onlyExpected;
+  return {
     commonPixels: common,
     onlyUploadPixels: onlyUpload,
     onlyExpectedPixels: onlyExpected,
     emptyPixels: empty,
     similarityPercent: union ? round(common / union * 100) : 100,
-    differencePercent: union ? round((onlyUpload + onlyExpected) / union * 100) : 0,
-    legend: 'noir=commun, rouge=upload seul, bleu=attendu seul'
+    differencePercent: union ? round((onlyUpload + onlyExpected) / union * 100) : 0
   };
-  return { canvas: output, stats };
 }
 
 function normalizedMask(sourceCanvas, width, height) {
@@ -214,6 +293,11 @@ function analyzeCanvas(canvas) {
   };
 }
 
+function bboxFill(stats) {
+  if (!stats?.bbox) return null;
+  return round(stats.darkPixels / (stats.bbox.width * stats.bbox.height));
+}
+
 function canvasMask(canvas) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -243,10 +327,40 @@ function renderStats(table, stats) {
   }
 }
 
+function createStageInspector() {
+  const main = document.querySelector('main');
+  const section = document.createElement('section');
+  section.className = 'card panel';
+  section.innerHTML = '<h2>4. Inspecteur de divergence</h2><p>Analyse simplifiee des etapes ou les deux images commencent a diverger.</p><table id="stageStats"></table>';
+  main?.appendChild(section);
+  return section.querySelector('#stageStats');
+}
+
+function renderPipelineInspection(pipeline) {
+  if (!stageInspector) return;
+  stageInspector.innerHTML = '';
+  addStageRow('Premiere divergence probable', pipeline.firstDivergence, pipeline.diagnostic);
+  for (const step of pipeline.steps) {
+    addStageRow(step.label, step.status, 'upload=' + step.uploadedValue + ' · attendu=' + step.expectedValue + ' · diff=' + step.difference + ' · tolerance=' + step.tolerance + (step.hint ? ' · ' + step.hint : ''));
+  }
+}
+
+function addStageRow(label, status, detail) {
+  const row = document.createElement('tr');
+  const th = document.createElement('th');
+  const td = document.createElement('td');
+  th.textContent = label;
+  td.textContent = String(status) + (detail ? ' — ' + detail : '');
+  if (status === 'mismatch') td.className = 'warn';
+  if (status === 'ok') td.className = 'ok';
+  row.append(th, td);
+  stageInspector.appendChild(row);
+}
+
 function downloadComparisonPng() {
   if (!lastComparison) return;
   const width = 1800;
-  const height = 760;
+  const height = 820;
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -256,12 +370,13 @@ function downloadComparisonPng() {
   ctx.fillStyle = '#111827';
   ctx.font = 'bold 28px sans-serif';
   ctx.fillText('ProfilScan comparaison visuelle - ' + lastComparison.fileName + ' vs ' + lastComparison.expectedReference, 32, 46);
-  drawPanel(ctx, lastComparison.uploadedCanvas, 32, 82, 540, 540, 'Upload rasterisé');
+  drawPanel(ctx, lastComparison.uploadedCanvas, 32, 82, 540, 540, 'Upload rasterise');
   drawPanel(ctx, lastComparison.expectedCanvas, 630, 82, 540, 540, 'Profil attendu base');
-  drawPanel(ctx, lastComparison.diffCanvas, 1228, 82, 540, 540, 'Différence');
+  drawPanel(ctx, lastComparison.diffCanvas, 1228, 82, 540, 540, 'Difference');
   ctx.font = '18px sans-serif';
-  ctx.fillText('Différence: ' + lastComparison.diffStats.differencePercent + '% · Similarité: ' + lastComparison.diffStats.similarityPercent + '%', 32, 690);
-  ctx.fillText('noir=commun · rouge=upload seul · bleu=attendu seul', 32, 722);
+  ctx.fillText('Difference: ' + lastComparison.diffStats.differencePercent + '% · Similarite: ' + lastComparison.diffStats.similarityPercent + '%', 32, 690);
+  ctx.fillText('Premiere divergence probable: ' + lastComparison.pipeline.firstDivergence + ' · ' + lastComparison.pipeline.diagnostic, 32, 722);
+  ctx.fillText('noir=commun · rouge=upload seul · bleu=attendu seul', 32, 754);
   const link = document.createElement('a');
   link.href = canvas.toDataURL('image/png');
   link.download = 'profilscan-visual-compare-' + lastComparison.expectedReference + '-' + timestampForFile() + '.png';
@@ -279,6 +394,13 @@ function drawPanel(ctx, source, x, y, width, height, title) {
   const drawWidth = source.width * scale;
   const drawHeight = source.height * scale;
   ctx.drawImage(source, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
+}
+
+function setPixel(data, offset, r, g, b) {
+  data[offset] = r;
+  data[offset + 1] = g;
+  data[offset + 2] = b;
+  data[offset + 3] = 255;
 }
 
 function setStatus(message, isError = false) {
@@ -302,6 +424,12 @@ function positiveNumber(...values) {
     if (Number.isFinite(number) && number > 0) return number;
   }
   return 100;
+}
+
+function numericDiff(a, b) {
+  const first = Number(a);
+  const second = Number(b);
+  return Number.isFinite(first) && Number.isFinite(second) ? round(first - second) : null;
 }
 
 function escapeAttribute(value) {
