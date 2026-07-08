@@ -204,7 +204,7 @@ function scaleDetectedObject(object, scale) {
 
 function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items }) {
   return {
-    version: '1.0',
+    version: '1.1',
     source: {
       width: imageBitmap.width,
       height: imageBitmap.height,
@@ -261,10 +261,37 @@ function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation,
         reference: item.reference,
         score: item.score,
         sectionScore: item.sectionScore,
+        detectedFingerprint: item.detectedFingerprintDebug || null,
         topCandidates: (item.topCandidates || []).slice(0, 5).map(candidate => ({ reference: candidate.reference, score: candidate.score }))
       }))
     }
   };
+}
+
+function summarizeFingerprint(fingerprint) {
+  if (!fingerprint) return null;
+  const descriptors = fingerprint.descriptors || {};
+  return {
+    version: fingerprint.version || null,
+    reference: fingerprint.reference || null,
+    summary: fingerprint.summary || null,
+    valuesLength: Array.isArray(fingerprint.values) ? fingerprint.values.length : 0,
+    normalizedPointCount: fingerprint.contour?.normalizedPoints?.length || 0,
+    descriptorSizes: {
+      radial: descriptors.radial?.length || 0,
+      angleHistogram: descriptors.angleHistogram?.length || 0,
+      hu: descriptors.hu?.length || 0,
+      fourier: descriptors.fourier?.length || 0,
+      points: descriptors.points?.length || 0,
+      minutiae: summarizeDescriptorObject(descriptors.minutiae),
+      localFeature: summarizeDescriptorObject(descriptors.localFeature)
+    }
+  };
+}
+
+function summarizeDescriptorObject(value) {
+  if (!value || typeof value !== 'object') return null;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, Array.isArray(entry) ? entry.length : entry]));
 }
 
 function summarizeArray(arrayLike) {
@@ -294,5 +321,14 @@ async function matchObject(object, collection, settings) {
   const detectedFingerprint = await buildUnifiedFingerprint({ kind: 'detected', object }, settings.pipelineSettings);
   const topCandidates = findTopMatches(detectedFingerprint, collection, settings.weights, 10);
   const best = topCandidates[0];
-  return { reference: best?.reference || 'N/A', designation: best?.designation || 'Profil inconnu', score: best?.score || 0, scoreDetails: best?.scoreDetails || null, sectionScore: object.sectionScore || 0, topCandidates, boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height } };
+  return {
+    reference: best?.reference || 'N/A',
+    designation: best?.designation || 'Profil inconnu',
+    score: best?.score || 0,
+    scoreDetails: best?.scoreDetails || null,
+    sectionScore: object.sectionScore || 0,
+    topCandidates,
+    boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height },
+    detectedFingerprintDebug: summarizeFingerprint(detectedFingerprint)
+  };
 }
