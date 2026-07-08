@@ -17,10 +17,10 @@
 
     <section id="screenNoBase" class="card hidden">
       <h2>Aucune base profils chargee</h2>
-      <p>Importe ton fichier <strong>dataprofils.js</strong>. Il restera uniquement sur cet appareil.</p>
+      <p>Importe ton fichier <strong>dataprofils.json</strong>. Il restera uniquement sur cet appareil.</p>
       <label class="button primary">
         Importer la base profils
-        <input id="profileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
+        <input id="profileDbInput" type="file" accept=".json,application/json" hidden>
       </label>
     </section>
 
@@ -36,7 +36,7 @@
       </label>
       <label class="button ghost">
         Remplacer la base
-        <input id="replaceProfileDbInput" type="file" accept=".js,.json,text/javascript,application/json" hidden>
+        <input id="replaceProfileDbInput" type="file" accept=".json,application/json" hidden>
       </label>
       <button id="pipelineSettingsButton" class="button ghost">Parametres du pipeline</button>
       <button id="resetAppButton" class="button ghost">Reinitialiser ProfilScan<br><small>Supprime la base locale, le cache et recharge l'application</small></button>
