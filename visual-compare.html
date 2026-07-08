@@ -7,7 +7,7 @@
   <style>
     :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; padding: 24px; background: #f4f6f8; color: #17202a; }
-    main { max-width: 1280px; margin: 0 auto; display: grid; gap: 20px; }
+    main { max-width: 1440px; margin: 0 auto; display: grid; gap: 20px; }
     h1 { margin: 0; font-size: 1.7rem; }
     .card { background: #fff; border: 1px solid #d9e0e7; border-radius: 14px; padding: 18px; box-shadow: 0 8px 24px rgba(15, 23, 42, .08); }
     .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: end; }
@@ -17,13 +17,18 @@
     button:disabled { opacity: .55; cursor: not-allowed; }
     .status { margin-top: 12px; color: #4b5563; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .pipeline-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
     .panel { display: grid; gap: 10px; }
-    .panel h2 { margin: 0; font-size: 1.05rem; }
+    .panel h2, .panel h3 { margin: 0; font-size: 1.05rem; }
     canvas { width: 100%; max-height: 520px; object-fit: contain; background: white; border: 1px solid #cbd5df; border-radius: 10px; image-rendering: auto; }
     table { width: 100%; border-collapse: collapse; font-size: .92rem; }
-    th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 7px 6px; }
+    th, td { text-align: left; border-bottom: 1px solid #edf2f7; padding: 7px 6px; vertical-align: top; }
     .warn { color: #9a3412; font-weight: 700; }
     .ok { color: #166534; font-weight: 700; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-weight: 700; font-size: .82rem; }
+    .badge.ok { background: #dcfce7; color: #166534; }
+    .badge.warn { background: #ffedd5; color: #9a3412; }
+    .badge.bad { background: #fee2e2; color: #991b1b; }
     @media (prefers-color-scheme: dark) {
       body { background: #0f172a; color: #e5e7eb; }
       .card { background: #111827; border-color: #334155; }
@@ -69,6 +74,38 @@
         <canvas id="diffCanvas" width="512" height="512"></canvas>
         <table id="diffStats"></table>
       </article>
+    </section>
+
+    <section class="card panel">
+      <h2>Inspecteur de pipeline simplifié</h2>
+      <p>Cette zone isole les premières étapes critiques : rasterisation, masque noir/blanc, recadrage bbox et normalisation bbox. Elle aide à repérer si l'écart apparaît avant le matching.</p>
+      <table id="pipelineStats"></table>
+      <div class="pipeline-grid">
+        <article class="panel">
+          <h3>Masque upload</h3>
+          <canvas id="uploadedMaskCanvas" width="384" height="384"></canvas>
+        </article>
+        <article class="panel">
+          <h3>Masque attendu</h3>
+          <canvas id="expectedMaskCanvas" width="384" height="384"></canvas>
+        </article>
+        <article class="panel">
+          <h3>Différence des masques</h3>
+          <canvas id="maskDiffCanvas" width="384" height="384"></canvas>
+        </article>
+        <article class="panel">
+          <h3>Upload normalisé bbox</h3>
+          <canvas id="uploadedNormalizedCanvas" width="384" height="384"></canvas>
+        </article>
+        <article class="panel">
+          <h3>Attendu normalisé bbox</h3>
+          <canvas id="expectedNormalizedCanvas" width="384" height="384"></canvas>
+        </article>
+        <article class="panel">
+          <h3>Différence normalisée</h3>
+          <canvas id="normalizedDiffCanvas" width="384" height="384"></canvas>
+        </article>
+      </div>
     </section>
   </main>
   <script type="module" src="./src/app/visual-compare.js"></script>
