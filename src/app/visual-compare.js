@@ -62,7 +62,7 @@ async function runVisualComparison() {
 
     renderStats(uploadedStats, { ...uploaded.stats, worker: workerDiagnostics.summary });
     renderStats(expectedStats, { ...expected.stats, profileGeometry: pipeline.profileGeometry, signatureSummary: pipeline.expectedSignatureSummary });
-    renderStats(diffStats, { ...diff.stats, firstDivergence: pipeline.firstDivergence, diagnostic: pipeline.diagnostic });
+    renderStats(diffStats, { ...diff.stats, firstDivergence: pipeline.firstDivergence, diagnostic: pipeline.diagnostic, scoreDiagnostics: pipeline.scoreDiagnostics });
     renderPipelineInspection(pipeline);
 
     lastComparison = {
@@ -154,8 +154,20 @@ function summarizeWorkerAnalysis(analysis, expectedReference) {
       expectedRank: expectedIndex >= 0 ? expectedIndex + 1 : null,
       expectedScore: round(expectedCandidate?.score)
     },
-    topCandidates: topCandidates.slice(0, 10).map((candidate, index) => ({ rank: index + 1, reference: candidate.reference, score: round(candidate.score), scoreDetails: candidate.scoreDetails })),
-    expectedCandidate: expectedCandidate ? { rank: expectedIndex + 1, reference: expectedCandidate.reference, score: round(expectedCandidate.score), scoreDetails: expectedCandidate.scoreDetails } : null,
+    topCandidates: topCandidates.slice(0, 10).map((candidate, index) => ({
+      rank: index + 1,
+      reference: candidate.reference,
+      score: round(candidate.score),
+      scoreDetails: candidate.scoreDetails,
+      scoreSummary: summarizeScoreDetails(candidate.scoreDetails)
+    })),
+    expectedCandidate: expectedCandidate ? {
+      rank: expectedIndex + 1,
+      reference: expectedCandidate.reference,
+      score: round(expectedCandidate.score),
+      scoreDetails: expectedCandidate.scoreDetails,
+      scoreSummary: summarizeScoreDetails(expectedCandidate.scoreDetails)
+    } : null,
     debug: {
       segmentation: analysis.debug?.segmentation || null,
       segmentationMode: analysis.debug?.segmentationMode || null,
@@ -178,6 +190,7 @@ function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, 
     perimeter: round(expectedProfile.perimeter)
   };
   const expectedSignatureSummary = summarizeStoredSignature(expectedProfile);
+  const scoreDiagnostics = buildScoreDiagnostics(workerDiagnostics, expectedProfile.reference);
   const worker = workerDiagnostics?.summary || {};
 
   const steps = [
@@ -190,7 +203,8 @@ function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, 
     compareStep('final-diff', 'Difference visuelle finale', diffStats.differencePercent, 0, 5, 'La divergence est visible sur les bitmaps finaux.'),
     statusStep('worker-detection', 'Detection worker', worker.detectedItems > 0 ? 'ok' : 'mismatch', worker.detectedItems || 0, 'Aucun objet detecte par le worker principal.'),
     statusStep('candidate-search', 'Profil attendu dans le Top10 worker', worker.expectedRank ? 'ok' : 'mismatch', worker.expectedRank || 'absent', 'Le bon profil est absent des candidats du worker.'),
-    statusStep('worker-top1', 'Top1 worker', sameReference(worker.bestReference, expectedProfile.reference) ? 'ok' : 'mismatch', worker.bestReference || 'aucun', 'Le worker classe un autre profil en premier.')
+    statusStep('worker-top1', 'Top1 worker', sameReference(worker.bestReference, expectedProfile.reference) ? 'ok' : 'mismatch', worker.bestReference || 'aucun', 'Le worker classe un autre profil en premier.'),
+    statusStep('score-pressure', 'Sous-score le plus penalising', scoreDiagnostics.strongestPenalty ? 'mismatch' : 'ok', scoreDiagnostics.strongestPenalty?.key || 'aucun', scoreDiagnostics.strongestPenalty ? 'Ce sous-score favorise le Top1 par rapport au profil attendu.' : null)
   ];
 
   const firstMismatch = steps.find(step => step.status === 'mismatch');
@@ -202,6 +216,7 @@ function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, 
     expected,
     profileGeometry,
     expectedSignatureSummary,
+    scoreDiagnostics,
     normalizedBboxComparison: normalized,
     workerDiagnostics,
     steps
@@ -222,6 +237,51 @@ function summarizeStoredSignature(profile) {
     minutiaeCounts: minutiae.counts || null,
     localFeatures: localFeature.features || null
   };
+}
+
+function buildScoreDiagnostics(workerDiagnostics, expectedReference) {
+  const top1 = workerDiagnostics?.topCandidates?.[0] || null;
+  const expected = workerDiagnostics?.expectedCandidate || null;
+  const topScores = top1?.scoreSummary?.subscores || {};
+  const expectedScores = expected?.scoreSummary?.subscores || {};
+  const keys = Array.from(new Set([...Object.keys(topScores), ...Object.keys(expectedScores)]));
+  const deltas = keys.map(key => ({
+    key,
+    top1: numberOrNull(topScores[key]),
+    expected: numberOrNull(expectedScores[key]),
+    deltaExpectedMinusTop1: numericDiff(expectedScores[key], topScores[key])
+  })).filter(row => row.top1 !== null || row.expected !== null);
+  const penalties = deltas.filter(row => Number.isFinite(row.deltaExpectedMinusTop1) && row.deltaExpectedMinusTop1 < 0).sort((a, b) => a.deltaExpectedMinusTop1 - b.deltaExpectedMinusTop1);
+  const helps = deltas.filter(row => Number.isFinite(row.deltaExpectedMinusTop1) && row.deltaExpectedMinusTop1 > 0).sort((a, b) => b.deltaExpectedMinusTop1 - a.deltaExpectedMinusTop1);
+  return {
+    expectedReference,
+    top1Reference: top1?.reference || null,
+    expectedRank: expected?.rank || null,
+    top1Score: top1?.score ?? null,
+    expectedScore: expected?.score ?? null,
+    scoreGap: numericDiff(top1?.score, expected?.score),
+    strongestPenalty: penalties[0] || null,
+    strongestHelp: helps[0] || null,
+    deltas,
+    top1Subscores: topScores,
+    expectedSubscores: expectedScores
+  };
+}
+
+function summarizeScoreDetails(scoreDetails) {
+  return {
+    total: round(scoreDetails?.total ?? scoreDetails?.score),
+    weighted: pickNumericMap(scoreDetails?.weighted),
+    subscores: pickNumericMap(scoreDetails?.subscores),
+    gates: pickNumericMap(scoreDetails?.gates),
+    penalties: pickNumericMap(scoreDetails?.penalties),
+    advanced: pickNumericMap(scoreDetails?.advanced)
+  };
+}
+
+function pickNumericMap(value) {
+  if (!value || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => Number.isFinite(Number(entry))).map(([key, entry]) => [key, round(entry)]));
 }
 
 function compareStep(key, label, uploadedValue, expectedValue, tolerance, hint) {
@@ -442,6 +502,10 @@ function renderPipelineInspection(pipeline) {
   addStageRow('Premiere divergence probable', pipeline.firstDivergence, pipeline.diagnostic);
   addStageRow('Signature attendue stockee', 'info', JSON.stringify(pipeline.expectedSignatureSummary));
   addStageRow('Worker Top10', 'info', JSON.stringify(pipeline.workerDiagnostics?.topCandidates?.map(candidate => ({ rank: candidate.rank, reference: candidate.reference, score: candidate.score })) || []));
+  addStageRow('Top1 sous-scores', 'info', JSON.stringify(pipeline.scoreDiagnostics.top1Subscores));
+  addStageRow('Attendu sous-scores', 'info', JSON.stringify(pipeline.scoreDiagnostics.expectedSubscores));
+  addStageRow('Plus forte penalisation', pipeline.scoreDiagnostics.strongestPenalty ? 'mismatch' : 'ok', JSON.stringify(pipeline.scoreDiagnostics.strongestPenalty || 'aucune'));
+  addStageRow('Meilleur soutien attendu', pipeline.scoreDiagnostics.strongestHelp ? 'ok' : 'info', JSON.stringify(pipeline.scoreDiagnostics.strongestHelp || 'aucun'));
   for (const step of pipeline.steps) {
     addStageRow(step.label, step.status, 'upload=' + step.uploadedValue + ' · attendu=' + step.expectedValue + ' · diff=' + step.difference + ' · tolerance=' + step.tolerance + (step.hint ? ' · ' + step.hint : ''));
   }
@@ -479,6 +543,7 @@ function downloadComparisonPng() {
   ctx.fillText('Difference: ' + lastComparison.diffStats.differencePercent + '% · Similarite: ' + lastComparison.diffStats.similarityPercent + '%', 32, 690);
   ctx.fillText('Premiere divergence probable: ' + lastComparison.pipeline.firstDivergence + ' · ' + lastComparison.pipeline.diagnostic, 32, 722);
   ctx.fillText('Top1 worker: ' + (lastComparison.pipeline.workerDiagnostics?.summary?.bestReference || 'aucun') + ' · rang attendu: ' + (lastComparison.pipeline.workerDiagnostics?.summary?.expectedRank || 'absent'), 32, 754);
+  ctx.fillText('Sous-score penaliseur: ' + (lastComparison.pipeline.scoreDiagnostics.strongestPenalty?.key || 'aucun'), 32, 786);
   const link = document.createElement('a');
   link.href = canvas.toDataURL('image/png');
   link.download = 'profilscan-visual-compare-' + lastComparison.expectedReference + '-' + timestampForFile() + '.png';
@@ -532,6 +597,11 @@ function numericDiff(a, b) {
   const first = Number(a);
   const second = Number(b);
   return Number.isFinite(first) && Number.isFinite(second) ? round(first - second) : null;
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? round(number) : null;
 }
 
 function escapeAttribute(value) {
