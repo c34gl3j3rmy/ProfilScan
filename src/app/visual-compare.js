@@ -19,6 +19,7 @@ const diffStats = document.querySelector('#diffStats');
 let lastComparison = null;
 let analysisWorker = null;
 const stageInspector = createStageInspector();
+const signatureInspector = createSignatureInspector();
 
 compareButton?.addEventListener('click', runVisualComparison);
 downloadButton?.addEventListener('click', downloadComparisonPng);
@@ -64,6 +65,7 @@ async function runVisualComparison() {
     renderStats(expectedStats, { ...expected.stats, profileGeometry: pipeline.profileGeometry, signatureSummary: pipeline.expectedSignatureSummary });
     renderStats(diffStats, { ...diff.stats, firstDivergence: pipeline.firstDivergence, diagnostic: pipeline.diagnostic, scoreDiagnostics: pipeline.scoreDiagnostics });
     renderPipelineInspection(pipeline);
+    renderSignatureInspection(pipeline);
 
     lastComparison = {
       fileName: file.name,
@@ -204,7 +206,7 @@ function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, 
     statusStep('worker-detection', 'Detection worker', worker.detectedItems > 0 ? 'ok' : 'mismatch', worker.detectedItems || 0, 'Aucun objet detecte par le worker principal.'),
     statusStep('candidate-search', 'Profil attendu dans le Top10 worker', worker.expectedRank ? 'ok' : 'mismatch', worker.expectedRank || 'absent', 'Le bon profil est absent des candidats du worker.'),
     statusStep('worker-top1', 'Top1 worker', sameReference(worker.bestReference, expectedProfile.reference) ? 'ok' : 'mismatch', worker.bestReference || 'aucun', 'Le worker classe un autre profil en premier.'),
-    statusStep('score-pressure', 'Sous-score le plus penalising', scoreDiagnostics.strongestPenalty ? 'mismatch' : 'ok', scoreDiagnostics.strongestPenalty?.key || 'aucun', scoreDiagnostics.strongestPenalty ? 'Ce sous-score favorise le Top1 par rapport au profil attendu.' : null)
+    statusStep('score-pressure', 'Sous-score le plus penalisant', scoreDiagnostics.strongestPenalty ? 'mismatch' : 'ok', scoreDiagnostics.strongestPenalty?.key || 'aucun', scoreDiagnostics.strongestPenalty ? 'Ce sous-score favorise le Top1 par rapport au profil attendu.' : null)
   ];
 
   const firstMismatch = steps.find(step => step.status === 'mismatch');
@@ -496,6 +498,15 @@ function createStageInspector() {
   return section.querySelector('#stageStats');
 }
 
+function createSignatureInspector() {
+  const main = document.querySelector('main');
+  const section = document.createElement('section');
+  section.className = 'card panel';
+  section.innerHTML = '<h2>5. Graphique des sous-scores</h2><p>Comparaison visuelle des sous-scores du Top1 et du profil attendu. Les barres positives aident le profil attendu, les negatives le penalisent.</p><canvas id="scoreChart" width="1200" height="520"></canvas><table id="scoreRows"></table>';
+  main?.appendChild(section);
+  return { canvas: section.querySelector('#scoreChart'), table: section.querySelector('#scoreRows') };
+}
+
 function renderPipelineInspection(pipeline) {
   if (!stageInspector) return;
   stageInspector.innerHTML = '';
@@ -509,6 +520,110 @@ function renderPipelineInspection(pipeline) {
   for (const step of pipeline.steps) {
     addStageRow(step.label, step.status, 'upload=' + step.uploadedValue + ' · attendu=' + step.expectedValue + ' · diff=' + step.difference + ' · tolerance=' + step.tolerance + (step.hint ? ' · ' + step.hint : ''));
   }
+}
+
+function renderSignatureInspection(pipeline) {
+  if (!signatureInspector?.canvas || !signatureInspector?.table) return;
+  const rows = pipeline.scoreDiagnostics?.deltas || [];
+  drawScoreChart(signatureInspector.canvas, rows);
+  renderScoreRows(signatureInspector.table, rows);
+}
+
+function drawScoreChart(canvas, rows) {
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('Sous-scores Top1 vs profil attendu', 28, 36);
+  ctx.font = '14px sans-serif';
+  ctx.fillText('Top1 = barre haute · attendu = barre basse · delta attendu-Top1 : positif favorable, negatif penalisant', 28, 62);
+
+  if (!rows.length) {
+    ctx.font = '18px sans-serif';
+    ctx.fillText('Aucun sous-score comparable : le profil attendu est probablement absent du Top10.', 28, 130);
+    return;
+  }
+
+  const plotX = 70;
+  const plotY = 95;
+  const plotWidth = width - 120;
+  const plotHeight = 320;
+  const maxScore = Math.max(1, ...rows.flatMap(row => [Number(row.top1) || 0, Number(row.expected) || 0]));
+  const groupWidth = plotWidth / rows.length;
+  const barWidth = Math.max(10, Math.min(34, groupWidth * 0.32));
+
+  ctx.strokeStyle = '#d1d5db';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = plotY + plotHeight - (i / 5) * plotHeight;
+    ctx.beginPath();
+    ctx.moveTo(plotX, y);
+    ctx.lineTo(plotX + plotWidth, y);
+    ctx.stroke();
+    ctx.fillStyle = '#6b7280';
+    ctx.fillText(String(round((i / 5) * maxScore)), 18, y + 5);
+  }
+
+  rows.forEach((row, index) => {
+    const center = plotX + index * groupWidth + groupWidth / 2;
+    const topHeight = ((Number(row.top1) || 0) / maxScore) * plotHeight;
+    const expectedHeight = ((Number(row.expected) || 0) / maxScore) * plotHeight;
+    const topX = center - barWidth - 2;
+    const expectedX = center + 2;
+    const baseY = plotY + plotHeight;
+
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(topX, baseY - topHeight, barWidth, topHeight);
+    ctx.fillStyle = Number(row.deltaExpectedMinusTop1) >= 0 ? '#166534' : '#b91c1c';
+    ctx.fillRect(expectedX, baseY - expectedHeight, barWidth, expectedHeight);
+
+    ctx.save();
+    ctx.translate(center - 4, plotY + plotHeight + 92);
+    ctx.rotate(-Math.PI / 4);
+    ctx.fillStyle = '#111827';
+    ctx.font = '13px sans-serif';
+    ctx.fillText(row.key, 0, 0);
+    ctx.restore();
+  });
+
+  ctx.fillStyle = '#64748b';
+  ctx.fillRect(plotX, height - 55, 18, 12);
+  ctx.fillStyle = '#111827';
+  ctx.fillText('Top1', plotX + 26, height - 44);
+  ctx.fillStyle = '#166534';
+  ctx.fillRect(plotX + 110, height - 55, 18, 12);
+  ctx.fillStyle = '#111827';
+  ctx.fillText('Attendu meilleur ou egal', plotX + 136, height - 44);
+  ctx.fillStyle = '#b91c1c';
+  ctx.fillRect(plotX + 330, height - 55, 18, 12);
+  ctx.fillStyle = '#111827';
+  ctx.fillText('Attendu penalise', plotX + 356, height - 44);
+}
+
+function renderScoreRows(table, rows) {
+  table.innerHTML = '';
+  const header = document.createElement('tr');
+  ['descripteur', 'Top1', 'attendu', 'delta attendu-Top1'].forEach(text => {
+    const th = document.createElement('th');
+    th.textContent = text;
+    header.appendChild(th);
+  });
+  table.appendChild(header);
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+    [row.key, row.top1, row.expected, row.deltaExpectedMinusTop1].forEach((value, index) => {
+      const td = document.createElement('td');
+      td.textContent = value === null || value === undefined ? '-' : String(value);
+      if (index === 3 && Number(value) < 0) td.className = 'warn';
+      if (index === 3 && Number(value) > 0) td.className = 'ok';
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+  });
 }
 
 function addStageRow(label, status, detail) {
