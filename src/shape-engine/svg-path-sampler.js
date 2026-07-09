@@ -18,7 +18,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     if (upper === 'M') {
       current = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
       start = current;
-      points.push(current);
+      points.push({ ...current, breakBefore: points.length > 0 });
       command = relative ? 'l' : 'L';
       continue;
     }
