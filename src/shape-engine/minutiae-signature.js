@@ -13,9 +13,9 @@ export function buildMinutiaeSignature(points, options = {}) {
   const safePoints = normalizeInputPoints(points);
   if (safePoints.length < 3) return emptySignature(config);
 
-  const closed = distance(safePoints[0], safePoints[safePoints.length - 1]) < config.cornerMinDistance;
+  const closed = isClosedPolyline(safePoints, config);
   const corners = findCorners(safePoints, config);
-  const terminations = closed ? [] : [safePoints[0], safePoints[safePoints.length - 1]];
+  const terminations = closed ? [] : findTerminations(safePoints);
   const graph = buildQuantizedGraph(safePoints, config);
   const bifurcations = findBifurcations(graph, config);
   const segments = buildSegments(safePoints, corners, closed, config);
@@ -81,7 +81,17 @@ function normalizeInputPoints(points) {
   if (!Array.isArray(points)) return [];
   return points
     .filter(point => Number.isFinite(point?.x) && Number.isFinite(point?.y))
-    .map(point => ({ x: Number(point.x), y: Number(point.y) }));
+    .map(point => ({ x: Number(point.x), y: Number(point.y), breakBefore: Boolean(point.breakBefore) }));
+}
+
+function isClosedPolyline(points, config) {
+  return splitContours(points).every(contour => contour.length > 2 && distance(contour[0], contour[contour.length - 1]) < config.cornerMinDistance);
+}
+
+function findTerminations(points) {
+  return splitContours(points)
+    .filter(contour => contour.length > 1)
+    .flatMap(contour => [{ ...contour[0], type: 'termination' }, { ...contour[contour.length - 1], type: 'termination' }]);
 }
 
 function findCorners(points, config) {
@@ -92,6 +102,7 @@ function findCorners(points, config) {
     const previous = points[i - 1];
     const point = points[i];
     const next = points[i + 1];
+    if (point.breakBefore || next.breakBefore) continue;
     const turn = turnAngle(previous, point, next);
 
     if (turn < config.cornerAngleThreshold) continue;
@@ -118,6 +129,7 @@ function buildQuantizedGraph(points, config) {
   const links = new Map();
 
   for (let i = 1; i < points.length; i++) {
+    if (points[i].breakBefore) continue;
     const a = quantize(points[i - 1], config.graphGridSize);
     const b = quantize(points[i], config.graphGridSize);
     const aKey = cellKey(a);
@@ -144,6 +156,16 @@ function findBifurcations(graph, config) {
 }
 
 function buildSegments(points, corners, closed, config) {
+  const contours = splitContours(points).filter(contour => contour.length > 1);
+  const segments = [];
+  for (const contour of contours) {
+    const contourCorners = corners.filter(corner => contour.some(point => distance(point, corner) < config.cornerMinDistance));
+    segments.push(...buildContourSegments(contour, contourCorners, closed, config));
+  }
+  return segments;
+}
+
+function buildContourSegments(points, corners, closed, config) {
   if (points.length < 2) return [];
   const cornerIndexes = corners
     .map(corner => nearestPointIndex(points, corner))
@@ -218,63 +240,65 @@ function compareHistogram(a = [], b = []) {
 }
 
 function comparePointCloud(a = [], b = []) {
-  if (!a.length || !b.length) return a.length === b.length ? 100 : 0;
-  const direct = averageNearestDistance(a, b);
-  const reverse = averageNearestDistance(b, a);
-  return clampScore(100 * (1 - ((direct + reverse) / 2) / 0.35));
+  if (!a.length || !b.length) return 0;
+  const sample = a.slice(0, Math.min(a.length, 40));
+  const average = sample.reduce((sum, point) => sum + nearestDistance(point, b), 0) / sample.length;
+  return clampScore(100 * (1 - Math.min(1, average / 0.18)));
 }
 
 function compareSegments(a = [], b = []) {
-  if (!a.length || !b.length) return a.length === b.length ? 100 : 0;
-  const countBalance = 1 - Math.abs(a.length - b.length) / Math.max(a.length, b.length, 1);
-  const orientationScore = compareHistogram(
-    buildOrientationHistogramFromStored(a, CONFIG.orientationBins),
-    buildOrientationHistogramFromStored(b, CONFIG.orientationBins)
-  ) / 100;
-  const lengthScore = compareHistogram(
-    buildLengthHistogramFromStored(a, CONFIG.lengthBins),
-    buildLengthHistogramFromStored(b, CONFIG.lengthBins)
-  ) / 100;
-  return clampScore((countBalance * 0.35 + orientationScore * 0.35 + lengthScore * 0.30) * 100);
+  if (!a.length || !b.length) return 0;
+  const countScore = compareCount(a.length, b.length);
+  const aLength = a.reduce((sum, segment) => sum + (Number(segment.length) || 0), 0);
+  const bLength = b.reduce((sum, segment) => sum + (Number(segment.length) || 0), 0);
+  const lengthScore = compareCount(aLength, bLength);
+  return clampScore(countScore * 0.5 + lengthScore * 0.5);
 }
 
-function buildOrientationHistogramFromStored(segments, binCount) {
-  const bins = Array.from({ length: binCount }, () => 0);
-  let total = 0;
-  for (const segment of segments) {
-    const angle = normalizeAngle(Number(segment.angle) || 0);
-    const length = Number(segment.length) || 0;
-    bins[Math.floor((angle / Math.PI) * binCount) % binCount] += length;
-    total += length;
+function nearestDistance(point, points) {
+  return points.reduce((best, candidate) => Math.min(best, distance(point, candidate)), Infinity);
+}
+
+function nearestPointIndex(points, target) {
+  let bestIndex = -1;
+  let bestDistance = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const currentDistance = distance(points[i], target);
+    if (currentDistance < bestDistance) {
+      bestDistance = currentDistance;
+      bestIndex = i;
+    }
   }
-  return normalizeBins(bins, total);
+  return bestIndex;
 }
 
-function buildLengthHistogramFromStored(segments, binCount) {
-  const bins = Array.from({ length: binCount }, () => 0);
-  const maxLength = Math.max(...segments.map(segment => Number(segment.length) || 0), 1);
-  for (const segment of segments) {
-    const length = Number(segment.length) || 0;
-    const bin = Math.min(binCount - 1, Math.floor((length / maxLength) * binCount));
-    bins[bin]++;
+function splitContours(points) {
+  const contours = [];
+  let current = [];
+  for (const point of points || []) {
+    if (point.breakBefore && current.length) {
+      contours.push(current);
+      current = [];
+    }
+    current.push(point);
   }
-  return normalizeBins(bins, segments.length || 1);
+  if (current.length) contours.push(current);
+  return contours;
 }
 
-function averageNearestDistance(a, b) {
-  const distances = a.map(point => Math.min(...b.map(other => distance(point, other))));
-  return distances.reduce((sum, value) => sum + value, 0) / distances.length;
+function uniqueIndexes(indexes) {
+  return [...new Set(indexes)].sort((a, b) => a - b);
 }
 
 function quantize(point, gridSize) {
   return {
-    gx: Math.round((point.x + 0.5) * gridSize),
-    gy: Math.round((point.y + 0.5) * gridSize)
+    x: Math.round((point.x + 0.5) * gridSize),
+    y: Math.round((point.y + 0.5) * gridSize)
   };
 }
 
 function cellKey(cell) {
-  return `${cell.gx}:${cell.gy}`;
+  return `${cell.x}:${cell.y}`;
 }
 
 function addLink(links, from, to) {
@@ -283,42 +307,31 @@ function addLink(links, from, to) {
   links.get(from).add(to);
 }
 
-function nearestPointIndex(points, target) {
-  let bestIndex = -1;
-  let bestDistance = Infinity;
-  for (let i = 0; i < points.length; i++) {
-    const value = distance(points[i], target);
-    if (value < bestDistance) {
-      bestDistance = value;
-      bestIndex = i;
-    }
-  }
-  return bestIndex;
-}
-
-function uniqueIndexes(indexes) {
-  return [...new Set(indexes)].sort((a, b) => a - b);
+function normalizeAngle(angle) {
+  let value = Math.abs(angle) % Math.PI;
+  if (value < 0) value += Math.PI;
+  return value;
 }
 
 function normalizeBins(bins, total) {
-  const safeTotal = total || bins.reduce((sum, value) => sum + value, 0) || 1;
-  return bins.map(value => round(value / safeTotal));
+  return bins.map(value => total ? round(value / total) : 0);
 }
 
-function normalizeAngle(angle) {
-  let normalized = angle % Math.PI;
-  if (normalized < 0) normalized += Math.PI;
-  return normalized;
+function compareCount(a, b) {
+  const av = Number(a) || 0;
+  const bv = Number(b) || 0;
+  const max = Math.max(av, bv, 1);
+  return clampScore(100 * (1 - Math.abs(av - bv) / max));
 }
 
 function distance(a, b) {
-  return Math.hypot((a.x || 0) - (b.x || 0), (a.y || 0) - (b.y || 0));
+  return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0));
 }
 
-function clampScore(score) {
-  return Math.max(0, Math.min(100, score));
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
 }
 
 function round(value) {
-  return Math.round(value * 1000000) / 1000000;
+  return Math.round((Number(value) || 0) * 1000) / 1000;
 }
