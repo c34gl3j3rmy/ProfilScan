@@ -7,7 +7,7 @@
   <style>
     :root { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color-scheme: light dark; }
     body { margin: 0; padding: 24px; background: #f4f6f8; color: #17202a; }
-    main { max-width: 1360px; margin: 0 auto; display: grid; gap: 18px; }
+    main { max-width: 1480px; margin: 0 auto; display: grid; gap: 18px; }
     .card { background: #fff; border: 1px solid #d9e0e7; border-radius: 14px; padding: 18px; box-shadow: 0 8px 24px rgba(15, 23, 42, .08); }
     h1, h2, h3 { margin: 0 0 10px; }
     .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: end; }
@@ -15,7 +15,7 @@
     input, button { font: inherit; border-radius: 10px; border: 1px solid #cbd5df; padding: 10px 12px; background: #fff; color: inherit; }
     button { cursor: pointer; font-weight: 700; background: #14213d; color: white; border: 0; }
     button:disabled { opacity: .55; cursor: not-allowed; }
-    .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+    .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
     .stage { display: grid; gap: 10px; }
     canvas { width: 100%; background: #fff; border: 1px solid #cbd5df; border-radius: 10px; }
     table { width: 100%; border-collapse: collapse; font-size: .92rem; }
@@ -23,13 +23,14 @@
     .warn { color: #9a3412; font-weight: 700; }
     .ok { color: #166534; font-weight: 700; }
     .status { color: #4b5563; }
+    .hint { color: #64748b; font-size: .92rem; margin: -4px 0 4px; }
     @media (prefers-color-scheme: dark) {
       body { background: #0f172a; color: #e5e7eb; }
       .card { background: #111827; border-color: #334155; }
       input { background: #0f172a; border-color: #475569; }
       canvas { background: #fff; }
       th, td { border-bottom-color: #334155; }
-      .status { color: #cbd5e1; }
+      .status, .hint { color: #cbd5e1; }
     }
   </style>
 </head>
@@ -56,9 +57,18 @@
         <h3>1. Original rasterisé</h3>
         <canvas id="uploadOriginalCanvas" width="900" height="640"></canvas>
         <h3>2. Segmentation / points d'arête</h3>
+        <p class="hint">Permet de voir si les trous ou liaisons sont déjà présents dans le masque d'arêtes.</p>
         <canvas id="uploadEdgeCanvas" width="900" height="640"></canvas>
-        <h3>3. Contours et candidats</h3>
+        <h3>3. Contours bruts reconstruits</h3>
+        <p class="hint">Les contours sont séparés par rupture ; les sauts longs sont affichés en bleu.</p>
+        <canvas id="uploadRawContourCanvas" width="900" height="640"></canvas>
+        <h3>4. Contours et candidats retenus</h3>
         <canvas id="uploadContourCanvas" width="900" height="640"></canvas>
+        <h3>5. Rééchantillonnage / normalisation</h3>
+        <p class="hint">Si la diagonale apparaît ici seulement, le défaut vient après l'extraction de contour.</p>
+        <canvas id="uploadNormalizedCanvas" width="900" height="640"></canvas>
+        <h3>6. Descripteurs</h3>
+        <canvas id="uploadDescriptorCanvas" width="900" height="360"></canvas>
         <table id="uploadTable"></table>
       </article>
       <article class="card stage">
@@ -67,8 +77,14 @@
         <canvas id="expectedOriginalCanvas" width="900" height="640"></canvas>
         <h3>2. Segmentation / points d'arête</h3>
         <canvas id="expectedEdgeCanvas" width="900" height="640"></canvas>
-        <h3>3. Contours et candidats</h3>
+        <h3>3. Contours bruts reconstruits</h3>
+        <canvas id="expectedRawContourCanvas" width="900" height="640"></canvas>
+        <h3>4. Contours et candidats retenus</h3>
         <canvas id="expectedContourCanvas" width="900" height="640"></canvas>
+        <h3>5. Rééchantillonnage / normalisation</h3>
+        <canvas id="expectedNormalizedCanvas" width="900" height="640"></canvas>
+        <h3>6. Descripteurs</h3>
+        <canvas id="expectedDescriptorCanvas" width="900" height="360"></canvas>
         <table id="expectedTable"></table>
       </article>
     </section>
