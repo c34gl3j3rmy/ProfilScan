@@ -38,7 +38,7 @@ self.onmessage = async event => {
       .map(object => scaleDetectedObject(object, source.scale));
     postProgress(88, 'Comparaison avec la base', `${objects.length} sections candidates`);
     const items = await Promise.all(objects.map(object => matchObject(object, collection, activeSettings)));
-    const debugPipeline = buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items });
+    const debugPipeline = buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items });
     const debug = {
       edges: edgePoints,
       segmentation: segmentation.stats,
@@ -166,11 +166,19 @@ function findComponents(mask, width, height) {
 }
 
 function simplifyContourPoints(points, maxPoints) {
-  if (points.length <= maxPoints) return points;
-  const step = points.length / maxPoints;
+  if (!Array.isArray(points) || points.length <= maxPoints) return points || [];
+  const contours = splitContours(points);
+  const total = contours.reduce((sum, contour) => sum + contour.length, 0) || 1;
   const output = [];
-  for (let i = 0; i < maxPoints; i++) output.push(points[Math.floor(i * step)]);
-  return output;
+  for (const contour of contours) {
+    const count = Math.max(2, Math.round((contour.length / total) * maxPoints));
+    const step = Math.max(1, contour.length / count);
+    for (let i = 0; i < count && Math.floor(i * step) < contour.length; i++) {
+      const point = contour[Math.floor(i * step)];
+      output.push({ ...point, breakBefore: output.length > 0 && i === 0 });
+    }
+  }
+  return output.slice(0, maxPoints);
 }
 
 function sampleMaskPoints(mask, width, height, scale, maxPoints) {
@@ -197,14 +205,19 @@ function scaleDetectedObject(object, scale) {
     closed: object.closed,
     sectionCandidate: object.sectionCandidate,
     sectionScore: object.sectionScore || 0,
-    points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })),
-    holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: hole.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })) }))
+    points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale), breakBefore: Boolean(point.breakBefore) })),
+    holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: hole.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale), breakBefore: Boolean(point.breakBefore) })) }))
   };
 }
 
-function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items }) {
+function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, activeSettings, segmentation, edgePoints, linkedEdges, components, objects, items }) {
+  const firstItem = items[0]?.detectedFingerprintDebug || null;
+  const visual = firstItem?.visualDescriptors || {};
+  const minutiae = firstItem?.descriptorSamples?.minutiae || null;
+  const localFeature = firstItem?.descriptorSamples?.localFeature || null;
+
   return {
-    version: '1.2',
+    version: '1.3',
     source: {
       width: imageBitmap.width,
       height: imageBitmap.height,
@@ -214,7 +227,9 @@ function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation,
     },
     preprocessing: {
       settings: activeSettings.image,
-      gray: summarizeArray(source.imageData?.data),
+      gray: summarizeArray(gray),
+      denoised: summarizeArray(denoised),
+      blurred: summarizeArray(blurred),
       denoisedApplied: activeSettings.image.textureSuppression > 0,
       blurRadius: activeSettings.image.blurRadius
     },
@@ -222,8 +237,37 @@ function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation,
       settings: activeSettings.detection,
       mode: segmentation.mode,
       stats: segmentation.stats,
-      sampledEdgePoints: edgePoints.length
+      sampledEdgePoints: edgePoints.length,
+      edgePreview: samplePoints(edgePoints, 600)
     },
+    contours: {
+      count: objects.length,
+      longJumps: objects.flatMap((object, index) => detectLongJumps(object.points).map(jump => ({ objectIndex: index, ...jump }))).slice(0, 80),
+      previews: objects.slice(0, 8).map(object => ({
+        closed: object.closed,
+        sectionScore: object.sectionScore || 0,
+        contourCount: splitContours(object.points).length,
+        pointCount: object.points.length,
+        points: samplePoints(object.points, 240),
+        holes: (object.holes || []).map(hole => ({ closed: hole.closed, pointCount: hole.points.length, points: samplePoints(hole.points, 120) }))
+      }))
+    },
+    resampling: {
+      pointCount: firstItem?.normalizedPointCount || 0,
+      points: visual.normalizedPoints || []
+    },
+    normalization: {
+      summary: firstItem?.summary || null,
+      descriptorSizes: firstItem?.descriptorSizes || null
+    },
+    radial: {
+      values: visual.radial || []
+    },
+    fourier: {
+      values: visual.fourier || []
+    },
+    minutiae,
+    localFeature,
     linking: {
       linkRadius: activeSettings.detection.linkRadius,
       linkedEdgePixels: countMaskPixels(linkedEdges)
@@ -252,6 +296,7 @@ function buildDebugPipeline({ imageBitmap, source, activeSettings, segmentation,
         closed: object.closed,
         sectionScore: object.sectionScore || 0,
         points: object.points.length,
+        contourCount: splitContours(object.points).length,
         holes: object.holes.length
       }))
     },
@@ -286,6 +331,10 @@ function summarizeFingerprint(fingerprint) {
       minutiae: summarizeDescriptorObject(descriptors.minutiae),
       localFeature: summarizeDescriptorObject(descriptors.localFeature)
     },
+    descriptorSamples: {
+      minutiae: descriptors.minutiae || null,
+      localFeature: descriptors.localFeature || null
+    },
     visualDescriptors: {
       radial: copyNumericArray(descriptors.radial, 128),
       angleHistogram: copyNumericArray(descriptors.angleHistogram, 128),
@@ -304,14 +353,60 @@ function copyNumericArray(value, maxLength) {
 
 function samplePoints(points, maxPoints) {
   if (!Array.isArray(points) || !points.length) return [];
-  const step = Math.max(1, Math.ceil(points.length / maxPoints));
+  const contours = splitContours(points);
+  const total = contours.reduce((sum, contour) => sum + contour.length, 0) || 1;
   const output = [];
-  for (let i = 0; i < points.length; i += step) {
-    const point = points[i];
-    if (Array.isArray(point)) output.push({ x: roundNumber(point[0]), y: roundNumber(point[1]) });
-    else output.push({ x: roundNumber(point.x), y: roundNumber(point.y) });
+  for (const contour of contours) {
+    const count = Math.max(1, Math.round((contour.length / total) * maxPoints));
+    const step = Math.max(1, Math.ceil(contour.length / count));
+    for (let i = 0; i < contour.length; i += step) {
+      const point = contour[i];
+      const sampled = Array.isArray(point)
+        ? { x: roundNumber(point[0]), y: roundNumber(point[1]) }
+        : { x: roundNumber(point.x), y: roundNumber(point.y) };
+      sampled.breakBefore = output.length > 0 && i === 0;
+      output.push(sampled);
+      if (output.length >= maxPoints) return output;
+    }
   }
   return output;
+}
+
+function splitContours(points) {
+  const contours = [];
+  let current = [];
+  for (const point of points || []) {
+    if (point?.breakBefore && current.length) {
+      contours.push(current);
+      current = [];
+    }
+    current.push(point);
+  }
+  if (current.length) contours.push(current);
+  return contours;
+}
+
+function detectLongJumps(points) {
+  const jumps = [];
+  const contours = splitContours(points);
+  for (const contour of contours) {
+    const distances = [];
+    for (let i = 1; i < contour.length; i++) distances.push(Math.hypot(contour[i].x - contour[i - 1].x, contour[i].y - contour[i - 1].y));
+    const median = percentile(distances, 0.5) || 1;
+    for (let i = 1; i < contour.length; i++) {
+      const distance = Math.hypot(contour[i].x - contour[i - 1].x, contour[i].y - contour[i - 1].y);
+      if (distance > Math.max(12, median * 8)) {
+        jumps.push({ from: contour[i - 1], to: contour[i], distance: Math.round(distance * 10) / 10, median: Math.round(median * 10) / 10 });
+      }
+    }
+  }
+  return jumps;
+}
+
+function percentile(values, ratio) {
+  const sorted = values.filter(value => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * ratio)))];
 }
 
 function roundNumber(value) {
