@@ -1,272 +1,334 @@
-import { loadImageFile } from './image-import.js';
-import { computeAutoImageSettings } from './auto-settings.js';
-import { getCollection } from '../storage/indexed-db.js';
+let lastResult = null;
+let panelOpen = false;
 
-const fileInput = document.querySelector('#fileInput');
-const referenceInput = document.querySelector('#referenceInput');
-const runButton = document.querySelector('#runButton');
-const statusNode = document.querySelector('#status');
-const overlayCanvas = document.querySelector('#overlayCanvas');
-const contourCanvas = document.querySelector('#contourCanvas');
-const diagnosticTable = document.querySelector('#diagnosticTable');
-const topTable = document.querySelector('#topTable');
+const button = document.querySelector('#debugPipelineButton');
+const panel = document.querySelector('#debugPipelinePanel');
+const summary = document.querySelector('#debugPipelineSummary');
+const stages = document.querySelector('#debugPipelineStages');
 
-let worker = null;
-let lastImageBitmap = null;
-
-fileInput?.addEventListener('change', () => {
-  const file = fileInput.files?.[0];
-  if (file && !referenceInput.value.trim()) referenceInput.value = referenceFromFilename(file.name);
+window.addEventListener('profilscan:result-rendered', event => {
+  lastResult = event.detail?.result || window.__profilScanLastResult || null;
+  if (panelOpen) renderDebugPipeline(lastResult);
 });
-runButton?.addEventListener('click', runPipelineDebug);
 
-async function runPipelineDebug() {
-  const file = fileInput?.files?.[0];
-  if (!file) {
-    setStatus('Selectionne un fichier a analyser.', true);
+button?.addEventListener('click', () => {
+  panelOpen = !panelOpen;
+  panel?.classList.toggle('hidden', !panelOpen);
+  button.textContent = panelOpen ? 'Masquer debug' : 'Debug pipeline';
+  if (panelOpen) renderDebugPipeline(lastResult || window.__ProfilScanLastResult || window.__profilScanLastResult || null);
+});
+
+export function renderDebugPipeline(result) {
+  if (!summary || !stages) return;
+  const debug = result?.debugPipeline || result?.debug?.debugPipeline || null;
+  if (!debug) {
+    summary.innerHTML = '<div class="debug-empty">Aucun debugPipeline disponible. Lance une analyse puis rouvre ce panneau.</div>';
+    stages.innerHTML = '';
     return;
   }
 
-  runButton.disabled = true;
-  try {
-    setStatus('Chargement de la base locale...');
-    const collection = await getCollection();
-    if (!collection?.profiles?.length) throw new Error('Base locale absente. Importe d abord dataprofils.json dans ProfilScan.');
+  summary.innerHTML = renderSummary(debug, result);
+  stages.innerHTML = '';
 
-    const expectedReference = (referenceInput.value || referenceFromFilename(file.name)).trim();
-    const expectedProfile = collection.profiles.find(profile => sameReference(profile.reference, expectedReference));
-    if (!expectedProfile) throw new Error('Reference attendue introuvable dans la base : ' + expectedReference);
-
-    setStatus('Chargement et reglages automatiques...');
-    const imageBitmap = await loadImageFile(file);
-    lastImageBitmap = imageBitmap;
-    const auto = await computeAutoImageSettings(imageBitmap);
-    const settings = buildWorkerSettings(auto, collection, expectedReference);
-
-    setStatus('Analyse avec le worker principal...');
-    const analysis = await analyzeBitmap(imageBitmap, collection, settings);
-    const diagnostics = summarizeAnalysis(analysis, expectedReference);
-
-    drawOverlay(lastImageBitmap, analysis, overlayCanvas);
-    drawContours(analysis, contourCanvas);
-    renderDiagnostics(diagnostics, expectedProfile, auto);
-    renderTopCandidates(diagnostics.topCandidates, expectedReference);
-    setStatus('Inspection terminee : Top1 ' + (diagnostics.summary.bestReference || 'aucun') + ', attendu rang ' + (diagnostics.summary.expectedRank || 'absent Top10') + '.', diagnostics.summary.expectedRank !== 1);
-  } catch (error) {
-    setStatus(formatError(error), true);
-  } finally {
-    runButton.disabled = false;
+  for (const stage of buildStages(debug)) {
+    stages.appendChild(renderStage(stage, debug));
   }
 }
 
-function buildWorkerSettings(auto, collection, expectedReference) {
-  return {
-    expectedReference,
-    image: { brightness: auto.brightness, contrast: auto.contrast, blurRadius: 1, textureSuppression: 0 },
-    detection: {
-      edgeQuantile: auto.edgeQuantile / 100,
-      linkRadius: auto.linkRadius,
-      minAreaRatio: auto.minArea / 10000,
-      mergeGapRatio: auto.mergeGap / 1000
-    },
-    pipelineSettings: collection.pipelineSettings || null
-  };
+function renderSummary(debug, result) {
+  const source = debug.source || {};
+  const contours = debug.contours || {};
+  const components = debug.components || {};
+  const candidates = debug.candidates || {};
+  const longJumps = Array.isArray(contours.longJumps) ? contours.longJumps.length : 0;
+  const holes = (contours.previews || []).reduce((sum, contour) => sum + (contour.holes?.length || 0), 0);
+
+  return [
+    summaryCard('Image', `${source.width || result?.width || '-'} x ${source.height || result?.height || '-'}`, `scale ${formatNumber(source.scale)}`),
+    summaryCard('Contours', contours.count ?? '-', `${longJumps} saut(s) long(s)`),
+    summaryCard('Composants', components.count ?? '-', `${holes} trou(s) visible(s)`),
+    summaryCard('Candidats', candidates.count ?? result?.items?.length ?? '-', 'apres filtrage')
+  ].join('');
 }
 
-function analyzeBitmap(imageBitmap, collection, settings) {
-  return new Promise((resolve, reject) => {
-    const activeWorker = getWorker();
-    activeWorker.onmessage = event => {
-      const message = event.data;
-      if (message?.type === 'progress') {
-        setStatus(message.label + ' - ' + message.detail);
-        return;
+function summaryCard(label, value, hint) {
+  return `<div class="debug-summary-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(hint || '')}</small></div>`;
+}
+
+function buildStages(debug) {
+  return [
+    {
+      title: '1. Segmentation',
+      description: 'Points rouges avant liaison des contours.',
+      points: debug.segmentation?.edgePreview || [],
+      metrics: {
+        mode: debug.segmentation?.mode,
+        sampledEdgePoints: debug.segmentation?.sampledEdgePoints,
+        threshold: debug.segmentation?.stats?.threshold,
+        activePixels: debug.segmentation?.stats?.activePixels
       }
-      if (message?.type === 'error') reject(new Error(message.message || 'Erreur worker'));
-      else resolve(message);
-    };
-    activeWorker.onerror = event => reject(new Error(formatError(event)));
-    activeWorker.postMessage({ type: 'analyze', imageBitmap, collection, settings }, [imageBitmap]);
-  });
-}
-
-function getWorker() {
-  if (!worker) worker = new Worker(new URL('../workers/analysis-worker.js', import.meta.url), { type: 'module' });
-  return worker;
-}
-
-function summarizeAnalysis(analysis, expectedReference) {
-  const firstItem = analysis.items?.[0] || null;
-  const topCandidates = firstItem?.topCandidates || [];
-  const expectedIndex = topCandidates.findIndex(candidate => sameReference(candidate.reference, expectedReference));
-  const contours = analysis.debug?.contours || [];
-  const holes = contours.reduce((sum, contour) => sum + (contour.holes?.length || 0), 0);
-  return {
-    summary: {
-      imageWidth: analysis.width,
-      imageHeight: analysis.height,
-      detectedItems: analysis.items?.length || 0,
-      contours: contours.length,
-      holes,
-      segmentationMode: analysis.debug?.segmentationMode || null,
-      sectionCandidates: analysis.debug?.sectionCandidates?.length || 0,
-      bestReference: firstItem?.reference || null,
-      bestScore: round(firstItem?.score),
-      expectedRank: expectedIndex >= 0 ? expectedIndex + 1 : null,
-      expectedScore: expectedIndex >= 0 ? round(topCandidates[expectedIndex].score) : null
     },
-    debug: analysis.debug || {},
-    topCandidates: topCandidates.slice(0, 10).map((candidate, index) => ({
-      rank: index + 1,
-      reference: candidate.reference,
-      score: round(candidate.score),
-      designation: candidate.designation,
-      scoreDetails: summarizeScoreDetails(candidate.scoreDetails)
-    }))
-  };
+    {
+      title: '2. Contours ordonnes',
+      description: 'Contours issus du traceur. Orange = contour ouvert. Rouge = contour ferme. Violet = saut long detecte.',
+      contours: debug.contours?.previews || [],
+      longJumps: debug.contours?.longJumps || [],
+      metrics: {
+        count: debug.contours?.count,
+        longJumps: debug.contours?.longJumps?.length || 0
+      }
+    },
+    {
+      title: '3. Reechantillonnage / points normalises',
+      description: 'Points utilises par la signature detectee apres normalisation.',
+      normalizedPoints: debug.resampling?.points || [],
+      metrics: {
+        pointCount: debug.resampling?.pointCount,
+        descriptorSizes: debug.normalization?.descriptorSizes ? 'present' : 'absent'
+      }
+    },
+    {
+      title: '4. Signature radiale',
+      description: 'Resume graphique des valeurs radiales.',
+      values: debug.radial?.values || [],
+      metrics: { values: debug.radial?.values?.length || 0 }
+    },
+    {
+      title: '5. Fourier',
+      description: 'Resume graphique des descripteurs de Fourier.',
+      values: debug.fourier?.values || [],
+      metrics: { values: debug.fourier?.values?.length || 0 }
+    },
+    {
+      title: '6. Matching',
+      description: 'Premiers candidats remontes par le moteur de comparaison.',
+      matching: debug.matching || {},
+      metrics: { detectedItems: debug.matching?.count || 0 }
+    }
+  ];
 }
 
-function drawOverlay(imageBitmap, analysis, canvas) {
-  const ctx = canvas.getContext('2d');
-  fitCanvasToImage(canvas, imageBitmap, 900, 700);
-  const scaleX = canvas.width / imageBitmap.width;
-  const scaleY = canvas.height / imageBitmap.height;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+function renderStage(stage, debug) {
+  const root = document.createElement('section');
+  root.className = 'debug-stage-card';
 
-  ctx.lineWidth = 2;
-  for (const candidate of analysis.debug?.sectionCandidates || []) {
-    ctx.strokeStyle = '#2563eb';
-    ctx.strokeRect(candidate.x * scaleX, candidate.y * scaleY, candidate.width * scaleX, candidate.height * scaleY);
-    ctx.fillStyle = '#2563eb';
-    ctx.font = '14px sans-serif';
-    ctx.fillText(round(candidate.score || 0), candidate.x * scaleX + 4, candidate.y * scaleY + 16);
-  }
+  root.innerHTML = `
+    <header>
+      <div>
+        <h4>${escapeHtml(stage.title)}</h4>
+        <p>${escapeHtml(stage.description)}</p>
+      </div>
+      <details>
+        <summary>Mesures</summary>
+        <pre>${escapeHtml(JSON.stringify(stage.metrics || {}, null, 2))}</pre>
+      </details>
+    </header>
+  `;
+
+  if (stage.points) root.appendChild(renderPointCanvas(stage.points, debug, 'points'));
+  if (stage.contours) root.appendChild(renderContourCanvas(stage.contours, stage.longJumps || [], debug));
+  if (stage.normalizedPoints) root.appendChild(renderPointCanvas(stage.normalizedPoints, debug, 'normalized'));
+  if (stage.values) root.appendChild(renderValues(stage.values));
+  if (stage.matching) root.appendChild(renderMatching(stage.matching));
+
+  return root;
 }
 
-function drawContours(analysis, canvas) {
+function renderPointCanvas(points, debug, mode) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'debug-stage-canvas';
+  const size = mode === 'normalized' ? 360 : 520;
+  canvas.width = size;
+  canvas.height = size;
   const ctx = canvas.getContext('2d');
-  const width = analysis.width || 900;
-  const height = analysis.height || 700;
-  fitCanvasToSize(canvas, width, height, 900, 700);
-  const scaleX = canvas.width / width;
-  const scaleY = canvas.height / height;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawCanvasBackground(ctx);
 
-  const contours = analysis.debug?.contours || [];
+  if (mode === 'normalized') drawNormalizedPoints(ctx, points);
+  else drawImagePoints(ctx, points, debug);
+
+  return canvas;
+}
+
+function renderContourCanvas(contours, longJumps, debug) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'debug-stage-canvas';
+  canvas.width = 520;
+  canvas.height = 520;
+  const ctx = canvas.getContext('2d');
+  drawCanvasBackground(ctx);
+
+  const bounds = getImageBounds(debug);
+  const transform = makeImageTransform(bounds, canvas.width, canvas.height);
+
   contours.forEach((contour, index) => {
-    drawPointPath(ctx, contour.points || [], scaleX, scaleY, index === 0 ? '#16a34a' : '#0f766e', 2);
-    for (const hole of contour.holes || []) drawPointPath(ctx, hole.points || [], scaleX, scaleY, '#dc2626', 1.5);
+    drawPolyline(ctx, contour.points || [], transform, contour.closed ? '#dc2626' : '#f97316', Boolean(contour.closed));
+    for (const hole of contour.holes || []) drawPolyline(ctx, hole.points || [], transform, '#06b6d4', Boolean(hole.closed));
+    drawLabel(ctx, transform(bounds.x + 6, bounds.y + 18 + index * 18), `#${index + 1} ${contour.closed ? 'ferme' : 'ouvert'}`);
   });
+
+  for (const jump of longJumps || []) drawJump(ctx, jump, transform);
+
+  return canvas;
 }
 
-function drawPointPath(ctx, points, scaleX, scaleY, color, lineWidth) {
-  if (!points.length) return;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = lineWidth;
+function renderValues(values) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'debug-stage-canvas debug-bar-canvas';
+  canvas.width = 520;
+  canvas.height = 220;
+  const ctx = canvas.getContext('2d');
+  drawCanvasBackground(ctx);
+
+  const numeric = values.map(Number).filter(Number.isFinite);
+  const max = Math.max(...numeric.map(Math.abs), 1);
+  const gap = 2;
+  const width = Math.max(2, (canvas.width - 32) / Math.max(1, numeric.length) - gap);
+  const zeroY = canvas.height - 24;
+
+  ctx.save();
+  ctx.strokeStyle = '#d1d5db';
   ctx.beginPath();
-  ctx.moveTo(points[0].x * scaleX, points[0].y * scaleY);
-  for (const point of points.slice(1)) ctx.lineTo(point.x * scaleX, point.y * scaleY);
-  ctx.closePath();
+  ctx.moveTo(16, zeroY);
+  ctx.lineTo(canvas.width - 16, zeroY);
   ctx.stroke();
-}
-
-function fitCanvasToImage(canvas, imageBitmap, maxWidth, maxHeight) {
-  fitCanvasToSize(canvas, imageBitmap.width, imageBitmap.height, maxWidth, maxHeight);
-}
-
-function fitCanvasToSize(canvas, width, height, maxWidth, maxHeight) {
-  const scale = Math.min(maxWidth / width, maxHeight / height, 1);
-  canvas.width = Math.max(1, Math.round(width * scale));
-  canvas.height = Math.max(1, Math.round(height * scale));
-}
-
-function renderDiagnostics(diagnostics, expectedProfile, auto) {
-  const rows = {
-    expectedReference: expectedProfile.reference,
-    expectedDesignation: expectedProfile.designation,
-    expectedGeometry: { width: round(expectedProfile.width), height: round(expectedProfile.height), ratio: round(expectedProfile.ratio), surface: round(expectedProfile.surface), perimeter: round(expectedProfile.perimeter) },
-    autoSettings: auto,
-    ...diagnostics.summary,
-    segmentation: diagnostics.debug.segmentation || null,
-    contourPreview: (diagnostics.debug.contours || []).slice(0, 4).map(contour => ({ closed: contour.closed, points: contour.points?.length || 0, holes: contour.holes?.length || 0, sectionScore: round(contour.sectionScore) }))
-  };
-  renderObjectTable(diagnosticTable, rows);
-}
-
-function renderTopCandidates(candidates, expectedReference) {
-  topTable.innerHTML = '';
-  const header = document.createElement('tr');
-  ['rang', 'reference', 'score', 'designation', 'details'].forEach(text => {
-    const th = document.createElement('th');
-    th.textContent = text;
-    header.appendChild(th);
+  ctx.fillStyle = '#111827';
+  numeric.forEach((value, index) => {
+    const height = Math.max(1, Math.abs(value / max) * (canvas.height - 56));
+    const x = 16 + index * (width + gap);
+    const y = zeroY - height;
+    ctx.fillRect(x, y, width, height);
   });
-  topTable.appendChild(header);
-  for (const candidate of candidates) {
-    const row = document.createElement('tr');
-    if (sameReference(candidate.reference, expectedReference)) row.className = 'ok';
-    [candidate.rank, candidate.reference, candidate.score, candidate.designation, candidate.scoreDetails].forEach(value => {
-      const td = document.createElement('td');
-      td.textContent = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
-      row.appendChild(td);
-    });
-    topTable.appendChild(row);
+  ctx.restore();
+  return canvas;
+}
+
+function renderMatching(matching) {
+  const box = document.createElement('div');
+  box.className = 'debug-matching-list';
+  const rows = (matching.topItems || []).map((item, index) => {
+    const candidates = (item.topCandidates || []).map(candidate => `${candidate.reference} (${formatNumber(candidate.score)}%)`).join(' · ');
+    return `<li><strong>${index + 1}. ${escapeHtml(item.reference || '-')} - ${formatNumber(item.score)}%</strong><span>${escapeHtml(candidates || 'Aucun candidat')}</span></li>`;
+  }).join('');
+  box.innerHTML = rows ? `<ol>${rows}</ol>` : '<p class="hint">Aucun matching disponible.</p>';
+  return box;
+}
+
+function drawCanvasBackground(ctx) {
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.strokeRect(0.5, 0.5, ctx.canvas.width - 1, ctx.canvas.height - 1);
+  ctx.restore();
+}
+
+function drawImagePoints(ctx, points, debug) {
+  const bounds = getImageBounds(debug);
+  const transform = makeImageTransform(bounds, ctx.canvas.width, ctx.canvas.height);
+  ctx.save();
+  ctx.fillStyle = '#dc2626';
+  for (const point of points || []) {
+    const p = transform(point.x, point.y);
+    ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
   }
+  ctx.restore();
 }
 
-function renderObjectTable(table, object) {
-  table.innerHTML = '';
-  for (const [key, value] of Object.entries(object || {})) {
-    const row = document.createElement('tr');
-    const th = document.createElement('th');
-    const td = document.createElement('td');
-    th.textContent = key;
-    td.textContent = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
-    row.append(th, td);
-    table.appendChild(row);
+function drawNormalizedPoints(ctx, points) {
+  const transform = (x, y) => ({
+    x: ctx.canvas.width / 2 + x * ctx.canvas.width * 0.82,
+    y: ctx.canvas.height / 2 + y * ctx.canvas.height * 0.82
+  });
+  ctx.save();
+  ctx.strokeStyle = '#111827';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  let started = false;
+  for (const point of points || []) {
+    const p = transform(Number(point.x) || 0, Number(point.y) || 0);
+    if (!started || point.breakBefore) {
+      ctx.moveTo(p.x, p.y);
+      started = true;
+    } else ctx.lineTo(p.x, p.y);
   }
+  ctx.stroke();
+  ctx.fillStyle = '#2563eb';
+  for (const point of points || []) {
+    const p = transform(Number(point.x) || 0, Number(point.y) || 0);
+    ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+  }
+  ctx.restore();
 }
 
-function summarizeScoreDetails(scoreDetails) {
-  if (!scoreDetails) return null;
-  return {
-    total: round(scoreDetails.total ?? scoreDetails.score),
-    subscores: pickNumericMap(scoreDetails.subscores),
-    gates: pickNumericMap(scoreDetails.gates),
-    penalties: pickNumericMap(scoreDetails.penalties),
-    advanced: pickNumericMap(scoreDetails.advanced)
-  };
+function drawPolyline(ctx, points, transform, color, closed) {
+  if (!points?.length) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  let started = false;
+  for (const point of points) {
+    const p = transform(point.x, point.y);
+    if (!started || point.breakBefore) {
+      ctx.moveTo(p.x, p.y);
+      started = true;
+    } else ctx.lineTo(p.x, p.y);
+  }
+  if (closed) ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
 }
 
-function pickNumericMap(value) {
-  if (!value || typeof value !== 'object') return {};
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => Number.isFinite(Number(entry))).map(([key, entry]) => [key, round(entry)]));
+function drawJump(ctx, jump, transform) {
+  const from = jump.from || {};
+  const to = jump.to || {};
+  const a = transform(from.x, from.y);
+  const b = transform(to.x, to.y);
+  ctx.save();
+  ctx.strokeStyle = '#7c3aed';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 5]);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.fillStyle = '#7c3aed';
+  ctx.fillRect(a.x - 3, a.y - 3, 6, 6);
+  ctx.fillRect(b.x - 3, b.y - 3, 6, 6);
+  ctx.restore();
 }
 
-function setStatus(message, isError = false) {
-  statusNode.textContent = message;
-  statusNode.className = 'status ' + (isError ? 'warn' : 'ok');
+function drawLabel(ctx, point, text) {
+  ctx.save();
+  ctx.font = '12px system-ui';
+  ctx.fillStyle = '#111827';
+  ctx.fillText(text, point.x, point.y);
+  ctx.restore();
 }
 
-function referenceFromFilename(fileName) {
-  const dot = fileName.lastIndexOf('.');
-  return (dot > 0 ? fileName.slice(0, dot) : fileName).trim().replace(/\.min$/i, '');
+function getImageBounds(debug) {
+  const source = debug?.source || {};
+  const width = source.width || source.scaledWidth || 1;
+  const height = source.height || source.scaledHeight || 1;
+  return { x: 0, y: 0, width, height };
 }
 
-function sameReference(a, b) {
-  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+function makeImageTransform(bounds, canvasWidth, canvasHeight) {
+  const padding = 16;
+  const scale = Math.min((canvasWidth - padding * 2) / bounds.width, (canvasHeight - padding * 2) / bounds.height) || 1;
+  const offsetX = (canvasWidth - bounds.width * scale) / 2;
+  const offsetY = (canvasHeight - bounds.height * scale) / 2;
+  return (x, y) => ({ x: offsetX + (x - bounds.x) * scale, y: offsetY + (y - bounds.y) * scale });
 }
 
-function round(value) {
+function formatNumber(value) {
   const number = Number(value);
-  return Number.isFinite(number) ? Math.round(number * 100) / 100 : null;
+  if (!Number.isFinite(number)) return '-';
+  return Math.round(number * 100) / 100;
 }
 
-function formatError(error) {
-  if (error instanceof Error && error.message) return error.message;
-  if (error?.message) return String(error.message);
-  if (error?.filename) return error.filename + ':' + (error.lineno || '?') + ' - ' + (error.message || 'Erreur script');
-  return String(error);
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 }
