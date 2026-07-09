@@ -36,16 +36,20 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
 
   for (let index = 0; index < validProfiles.length; index++) {
     const profile = validProfiles[index];
-    report(onProgress, 58 + (index / validProfiles.length) * 30, 'Generation des signatures', formatImportProgress(index, validProfiles.length, rasterizedCount, rasterFallbackCount, profile, 'en cours'));
+    const startedAt = performance.now();
+    report(onProgress, 58 + (index / validProfiles.length) * 30, 'Generation des signatures', formatImportProgress({ index, total: validProfiles.length, rasterizedCount, rasterFallbackCount, profile, state: 'en cours' }));
     const fingerprint = await buildUnifiedFingerprint({ kind: 'profile', profile }, settings);
     const dna = buildUnifiedDNA(profile, settings);
+    const durationMs = performance.now() - startedAt;
+    const pipelineMode = fingerprint.summary?.pipelineMode || 'inconnu';
+    const usedFallback = pipelineMode !== 'svg-raster';
     enriched.push({ ...profile, fingerprint, dna: { ...dna, descriptors: fingerprint.descriptors, pipelineSettings: settings } });
-    if (fingerprint.summary?.pipelineMode === 'svg-raster') rasterizedCount++;
-    else rasterFallbackCount++;
+    if (usedFallback) rasterFallbackCount++;
+    else rasterizedCount++;
 
-    if (index % 10 === 0 || index === validProfiles.length - 1) {
+    if (index % 10 === 0 || usedFallback || index === validProfiles.length - 1) {
       const percent = 58 + ((index + 1) / validProfiles.length) * 30;
-      report(onProgress, percent, 'Generation des signatures', formatImportProgress(index, validProfiles.length, rasterizedCount, rasterFallbackCount, profile, 'termine'));
+      report(onProgress, percent, 'Generation des signatures', formatImportProgress({ index, total: validProfiles.length, rasterizedCount, rasterFallbackCount, profile, state: 'termine', pipelineMode, durationMs, usedFallback }));
       await yieldToBrowser();
     }
   }
@@ -69,11 +73,14 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
   };
 }
 
-function formatImportProgress(index, total, rasterizedCount, rasterFallbackCount, profile, state) {
+function formatImportProgress({ index, total, rasterizedCount, rasterFallbackCount, profile, state, pipelineMode = null, durationMs = null, usedFallback = false }) {
   const reference = profile?.reference || 'profil inconnu';
   const designation = profile?.designation ? ` · ${profile.designation}` : '';
-  const mode = state === 'en cours' ? 'en cours' : 'fait';
-  return `${index + 1} / ${total} · ${reference}${designation} · ${mode} · raster ${rasterizedCount} · secours ${rasterFallbackCount}`;
+  const stateLabel = state === 'en cours' ? 'en cours' : 'fait';
+  const mode = pipelineMode ? ` · mode ${pipelineMode}` : '';
+  const duration = Number.isFinite(durationMs) ? ` · ${Math.round(durationMs)} ms` : '';
+  const fallback = usedFallback ? ' · ⚠ secours' : '';
+  return `${index + 1} / ${total} · ${reference}${designation} · ${stateLabel}${mode}${duration}${fallback} · raster ${rasterizedCount} · secours ${rasterFallbackCount}`;
 }
 
 function report(onProgress, percent, label, detail) {
