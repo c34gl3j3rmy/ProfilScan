@@ -21,7 +21,7 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
   const scale = size * 0.82;
   const toCanvas = point => ({
     x: size / 2 + point.x * scale,
-    y: size / 2 - point.y * scale
+    y: size / 2 + point.y * scale
   });
 
   drawMaterialGrid(ctx, size, contourPoints, fingerprint?.pipelineSettings?.fillGridSize || fingerprint?.summary?.fillGridSize || 96);
@@ -47,7 +47,7 @@ function drawMaterialGrid(ctx, size, points, gridSize) {
     for (let xIndex = 0; xIndex < normalizedGridSize; xIndex++) {
       const x = start + xIndex * step;
       if (!isPointInsideContours(x, y, contours)) continue;
-      ctx.fillRect(xIndex * cellSize, (normalizedGridSize - 1 - yIndex) * cellSize, Math.max(0.8, cellSize), Math.max(0.8, cellSize));
+      ctx.fillRect(xIndex * cellSize, yIndex * cellSize, Math.max(0.8, cellSize), Math.max(0.8, cellSize));
     }
   }
 
