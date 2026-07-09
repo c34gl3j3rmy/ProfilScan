@@ -26,12 +26,13 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
   drawGrid(ctx, size, visibleGridCount(fingerprint?.pipelineSettings?.fillGridSize || 96));
   drawContour(ctx, points, toCanvas, size);
   drawPoints(ctx, points, toCanvas, size);
+  drawBreakMarkers(ctx, points, toCanvas, size);
   drawCaption(ctx, size, profile, fingerprint);
 }
 
 function drawMaterialGrid(ctx, size, points, gridSize) {
   const normalizedGridSize = clampGridSize(gridSize);
-  const contours = splitContours(points).filter(contour => contour.length >= 3);
+  const contours = splitContours(points).filter(contour => contour.length >= 3 && isDrawableContour(contour));
   const cellSize = size / normalizedGridSize;
   const step = 1 / normalizedGridSize;
   const start = -0.5 + step / 2;
@@ -58,13 +59,21 @@ function drawContour(ctx, points, toCanvas, size) {
 
   for (const contour of splitContours(points)) {
     if (contour.length < 2) continue;
+    const jumpLimit = estimateJumpLimit(contour);
     ctx.beginPath();
+    let started = false;
+
     contour.forEach((point, index) => {
       const canvasPoint = toCanvas(point);
-      if (index === 0) ctx.moveTo(canvasPoint.x, canvasPoint.y);
-      else ctx.lineTo(canvasPoint.x, canvasPoint.y);
+      const previous = contour[index - 1];
+      const shouldBreak = index === 0 || point.breakBefore || (previous && distance(previous, point) > jumpLimit);
+      if (!started || shouldBreak) {
+        ctx.moveTo(canvasPoint.x, canvasPoint.y);
+        started = true;
+      } else ctx.lineTo(canvasPoint.x, canvasPoint.y);
     });
-    if (isClosedContour(contour)) ctx.closePath();
+
+    if (isClosedContour(contour) && distance(contour[0], contour[contour.length - 1]) <= jumpLimit) ctx.closePath();
     ctx.stroke();
   }
 
@@ -105,6 +114,18 @@ function drawPoints(ctx, points, toCanvas, size) {
     ctx.beginPath();
     ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
     ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawBreakMarkers(ctx, points, toCanvas, size) {
+  ctx.save();
+  ctx.fillStyle = '#7c3aed';
+  const markerSize = Math.max(5, size / 60);
+  for (const point of points || []) {
+    if (!point.breakBefore) continue;
+    const canvasPoint = toCanvas(point);
+    ctx.fillRect(canvasPoint.x - markerSize / 2, canvasPoint.y - markerSize / 2, markerSize, markerSize);
   }
   ctx.restore();
 }
@@ -151,7 +172,38 @@ function isClosedContour(points) {
   if (points.length < 3) return false;
   const first = points[0];
   const last = points[points.length - 1];
-  return Math.hypot(first.x - last.x, first.y - last.y) < 0.01;
+  return distance(first, last) < 0.01;
+}
+
+function isDrawableContour(points) {
+  if (points.length < 3) return false;
+  const jumpLimit = estimateJumpLimit(points);
+  const jumps = countLongJumps(points, jumpLimit);
+  return jumps <= Math.max(1, Math.round(points.length * 0.03));
+}
+
+function countLongJumps(points, jumpLimit) {
+  let count = 0;
+  for (let index = 1; index < points.length; index++) {
+    if (distance(points[index - 1], points[index]) > jumpLimit) count++;
+  }
+  return count;
+}
+
+function estimateJumpLimit(points) {
+  if (!points || points.length < 3) return 0.08;
+  const distances = [];
+  for (let index = 1; index < points.length; index++) {
+    const value = distance(points[index - 1], points[index]);
+    if (value > 0) distances.push(value);
+  }
+  distances.sort((a, b) => a - b);
+  const median = distances[Math.floor(distances.length / 2)] || 0.01;
+  return Math.max(0.035, median * 8);
+}
+
+function distance(a, b) {
+  return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0));
 }
 
 function isPointInsideContours(x, y, contours) {
