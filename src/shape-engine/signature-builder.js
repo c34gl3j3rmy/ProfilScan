@@ -42,6 +42,7 @@ export function buildProfileDNACore(profile, pipelineSettings = {}) {
       perimeter: profile.perimeter
     },
     topology: {
+      fillRule: 'evenodd',
       contourCount: normalizedContours.length || 1,
       holeCount: Math.max(0, normalizedContours.length - 1),
       componentCount: 1
@@ -92,11 +93,8 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   const settings = normalizePipelineSettings(pipelineSettings);
   const normalizedContours = normalizeContours(contours || []);
   const normalizedPoints = flattenContours(normalizedContours);
-  const compactContours = normalizedContours.map(contour => ({
-    ...contour,
-    points: simplifyPoints(contour.points, settings.simplifyEpsilon).slice(0, settings.contourPointCount)
-  })).filter(contour => contour.points.length >= 2);
-  const compactPoints = flattenContours(compactContours).slice(0, settings.contourPointCount);
+  const compactContours = resampleContours(normalizedContours, settings.contourPointCount, settings.simplifyEpsilon);
+  const compactPoints = flattenContours(compactContours);
   const descriptorPoints = compactPoints.length ? compactPoints : normalizedPoints;
   const descriptorContours = compactContours.length ? compactContours : normalizedContours;
   const filledShape = buildFilledShape(normalizedContours, settings.fillGridSize);
@@ -119,13 +117,14 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   ];
 
   return {
-    version: '2.0',
+    version: '2.1',
     reference,
     values,
     contour: {
       contours: compactContours,
       normalizedPoints: compactPoints,
-      contourCount: compactContours.length
+      contourCount: compactContours.length,
+      fillRule: 'evenodd'
     },
     descriptors: { radial, angleHistogram, hu, fourier, minutiae, localFeature, points: compactPoints, contours: compactContours },
     pipelineSettings: settings,
@@ -138,7 +137,9 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       perimeter,
       fillRatio: effectiveFillRatio,
       pointCount: normalizedPoints.length,
+      descriptorPointCount: compactPoints.length,
       contourCount: normalizedContours.length,
+      fillRule: 'evenodd',
       source,
       huSource: filledShape.points.length ? settings.huSource : 'contour',
       pipelineVersion: settings.version,
@@ -174,6 +175,72 @@ function normalizeContours(contours) {
     closed: contour.closed,
     points: closeIfNeeded(contour.points.map(point => ({ x: (point.x - cx) / scale, y: (point.y - cy) / scale })), contour.closed)
   }));
+}
+
+function resampleContours(contours, targetCount, epsilon) {
+  const simplified = (contours || [])
+    .map(contour => ({ ...contour, points: simplifyPoints(contour.points || [], epsilon) }))
+    .filter(contour => contour.points.length >= 2);
+  if (!simplified.length) return [];
+
+  const lengths = simplified.map(contour => contourLength(contour.points));
+  const totalLength = lengths.reduce((sum, value) => sum + value, 0) || 1;
+  const allocations = allocateCounts(lengths, totalLength, targetCount, simplified.length);
+
+  return simplified.map((contour, index) => ({
+    ...contour,
+    points: sampleClosedContour(contour.points, allocations[index])
+  })).filter(contour => contour.points.length >= 2);
+}
+
+function allocateCounts(lengths, totalLength, targetCount, contourCount) {
+  const minimum = Math.min(4, Math.max(2, Math.floor(targetCount / Math.max(1, contourCount))));
+  const raw = lengths.map(length => Math.max(minimum, Math.round((length / totalLength) * targetCount)));
+  let total = raw.reduce((sum, value) => sum + value, 0);
+
+  while (total > targetCount) {
+    let bestIndex = -1;
+    let bestValue = -Infinity;
+    for (let index = 0; index < raw.length; index++) {
+      if (raw[index] > minimum && raw[index] > bestValue) {
+        bestIndex = index;
+        bestValue = raw[index];
+      }
+    }
+    if (bestIndex < 0) break;
+    raw[bestIndex]--;
+    total--;
+  }
+
+  while (total < targetCount && raw.length) {
+    let bestIndex = 0;
+    for (let index = 1; index < lengths.length; index++) {
+      if (lengths[index] > lengths[bestIndex]) bestIndex = index;
+    }
+    raw[bestIndex]++;
+    total++;
+  }
+  return raw;
+}
+
+function sampleClosedContour(points, targetCount) {
+  const closed = closeIfNeeded(points || [], true);
+  if (closed.length <= targetCount) return closed;
+  const output = [];
+  const step = (closed.length - 1) / Math.max(1, targetCount - 1);
+  for (let index = 0; index < targetCount - 1; index++) {
+    output.push(closed[Math.floor(index * step)]);
+  }
+  output.push({ ...output[0] });
+  return output;
+}
+
+function contourLength(points) {
+  let total = 0;
+  for (let index = 1; index < points.length; index++) {
+    total += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
+  }
+  return total;
 }
 
 function closeIfNeeded(points, closed = true) {
