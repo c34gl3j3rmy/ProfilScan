@@ -114,17 +114,7 @@ export function sampleSvgPathContours(pathText, options = {}) {
 }
 
 function flattenContours(contours) {
-  const output = [];
-  for (const contour of contours || []) {
-    const points = contour.points || [];
-    points.forEach((point, index) => output.push({
-      x: point.x,
-      y: point.y,
-      breakBefore: output.length > 0 && index === 0,
-      closed: Boolean(contour.closed)
-    }));
-  }
-  return output;
+  return (contours || []).flatMap(contour => contour.points || []);
 }
 
 function pushCurrentContour(contours, contour, closed) {
@@ -291,7 +281,7 @@ function endpointArcToCenter(from, to, rx, ry, rotationDegrees, largeArc, sweep)
 }
 
 function vectorAngle(a, b) {
-  const dot = a.x * b.x + a.y * b.y;
+  const dot = a.x * b.x + b.y * a.y;
   const det = a.x * b.y - a.y * b.x;
   return Math.atan2(det, dot);
 }
