@@ -1,11 +1,11 @@
 import { buildLocalFeatureSignature } from './local-feature-signature.js';
 import { buildMinutiaeSignature } from './minutiae-signature.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
-import { sampleSvgPathPolyline } from './svg-path-sampler.js';
+import { sampleSvgPathContours } from './svg-path-sampler.js';
 
 export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '', { maxSegmentLength: settings.sampleMaxSegmentLength });
+  const contours = sampleSvgPathContours(profile.svgPath || profile.paths || '', { maxSegmentLength: settings.sampleMaxSegmentLength });
   return buildFingerprint({
     reference: profile.reference,
     width: profile.width,
@@ -13,7 +13,7 @@ export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
     ratio: profile.ratio,
     surface: profile.surface,
     perimeter: profile.perimeter,
-    points,
+    contours,
     source: 'svg',
     pipelineSettings: settings
   });
@@ -21,12 +21,13 @@ export function buildProfileFingerprintCore(profile, pipelineSettings = {}) {
 
 export function buildProfileDNACore(profile, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  const points = sampleSvgPathPolyline(profile.svgPath || profile.paths || '', { maxSegmentLength: settings.sampleMaxSegmentLength });
+  const contours = sampleSvgPathContours(profile.svgPath || profile.paths || '', { maxSegmentLength: settings.sampleMaxSegmentLength });
   const fingerprint = buildProfileFingerprintCore(profile, settings);
-  const normalizedPoints = normalizePoints(points);
+  const normalizedContours = normalizeContours(contours);
+  const normalizedPoints = flattenContours(normalizedContours);
 
   return {
-    version: '1.5',
+    version: '1.6',
     identity: {
       reference: profile.reference,
       designation: profile.designation,
@@ -41,18 +42,19 @@ export function buildProfileDNACore(profile, pipelineSettings = {}) {
       perimeter: profile.perimeter
     },
     topology: {
-      contourCount: splitContours(normalizedPoints).length || 1,
-      holeCount: countSubPaths(profile.svgPath || profile.paths || '') - 1,
+      contourCount: normalizedContours.length || 1,
+      holeCount: Math.max(0, normalizedContours.length - 1),
       componentCount: 1
     },
     contour: {
+      contours: normalizedContours,
       normalizedPoints,
       simplifiedPoints: simplifyPoints(normalizedPoints, settings.simplifyEpsilon)
     },
     descriptors: fingerprint.descriptors,
     pipelineSettings: settings,
     quality: {
-      source: 'svg',
+      source: 'svg-contours',
       confidence: normalizedPoints.length ? 1 : 0.2,
       warnings: normalizedPoints.length ? [] : ['SVG path non echantillonne.']
     }
@@ -62,13 +64,16 @@ export function buildProfileDNACore(profile, pipelineSettings = {}) {
 export function buildDetectedBoxFingerprintCore(object, pipelineSettings = {}) {
   return buildDetectedFingerprintCore({
     ...object,
-    points: rectanglePoints(object.width, object.height)
+    contours: [{ points: rectanglePoints(object.width, object.height), closed: true }]
   }, pipelineSettings);
 }
 
 export function buildDetectedFingerprintCore(object, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const ratio = object.width / object.height;
+  const contours = object.contours?.length
+    ? object.contours
+    : [{ points: object.points?.length ? object.points : rectanglePoints(object.width, object.height), closed: true }];
   return buildFingerprint({
     reference: 'detected',
     width: object.width,
@@ -77,23 +82,28 @@ export function buildDetectedFingerprintCore(object, pipelineSettings = {}) {
     surface: object.area || 0,
     perimeter: object.perimeter || 2 * (object.width + object.height),
     fillRatio: object.area ? object.area / (object.width * object.height) : 0,
-    points: object.points?.length ? object.points : rectanglePoints(object.width, object.height),
-    source: object.points?.length ? 'contour' : 'box',
+    contours,
+    source: object.points?.length || object.contours?.length ? 'contour' : 'box',
     pipelineSettings: settings
   });
 }
 
-function buildFingerprint({ reference, width, height, ratio, surface, perimeter, fillRatio = 0, points, source, pipelineSettings }) {
+function buildFingerprint({ reference, width, height, ratio, surface, perimeter, fillRatio = 0, contours, source, pipelineSettings }) {
   const settings = normalizePipelineSettings(pipelineSettings);
-  const normalizedPoints = normalizePoints(points || []);
-  const compactPoints = simplifyPoints(normalizedPoints, settings.simplifyEpsilon).slice(0, settings.contourPointCount);
+  const normalizedContours = normalizeContours(contours || []);
+  const normalizedPoints = flattenContours(normalizedContours);
+  const compactContours = normalizedContours.map(contour => ({
+    ...contour,
+    points: simplifyPoints(contour.points, settings.simplifyEpsilon).slice(0, settings.contourPointCount)
+  })).filter(contour => contour.points.length >= 2);
+  const compactPoints = flattenContours(compactContours).slice(0, settings.contourPointCount);
   const descriptorPoints = compactPoints.length ? compactPoints : normalizedPoints;
-  const continuousDescriptorPoints = removeBreakMarkers(descriptorPoints);
-  const filledShape = buildFilledShape(normalizedPoints, settings.fillGridSize);
+  const descriptorContours = compactContours.length ? compactContours : normalizedContours;
+  const filledShape = buildFilledShape(normalizedContours, settings.fillGridSize);
   const radial = buildRadialSignature(normalizedPoints, settings.radialBins);
-  const angleHistogram = buildAngleHistogram(normalizedPoints, settings.angleBins);
-  const hu = buildHuMoments(filledShape.points.length ? filledShape.points : removeBreakMarkers(normalizedPoints));
-  const fourier = buildFourierDescriptor(longestContour(normalizedPoints), settings.fourierTerms);
+  const angleHistogram = buildAngleHistogram(descriptorContours, settings.angleBins);
+  const hu = buildHuMoments(filledShape.points.length ? filledShape.points : normalizedPoints);
+  const fourier = buildFourierDescriptor(longestContour(descriptorContours), settings.fourierTerms);
   const minutiae = buildMinutiaeSignature(descriptorPoints);
   const localFeature = buildLocalFeatureSignature(descriptorPoints);
   const effectiveFillRatio = filledShape.fillRatio || fillRatio;
@@ -109,14 +119,15 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   ];
 
   return {
-    version: '1.9',
+    version: '2.0',
     reference,
     values,
     contour: {
+      contours: compactContours,
       normalizedPoints: compactPoints,
-      contourCount: splitContours(compactPoints).length
+      contourCount: compactContours.length
     },
-    descriptors: { radial, angleHistogram, hu, fourier, minutiae, localFeature, points: compactPoints },
+    descriptors: { radial, angleHistogram, hu, fourier, minutiae, localFeature, points: compactPoints, contours: compactContours },
     pipelineSettings: settings,
     summary: {
       width,
@@ -127,8 +138,7 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       perimeter,
       fillRatio: effectiveFillRatio,
       pointCount: normalizedPoints.length,
-      contourCount: splitContours(normalizedPoints).length,
-      continuousPointCount: continuousDescriptorPoints.length,
+      contourCount: normalizedContours.length,
       source,
       huSource: filledShape.points.length ? settings.huSource : 'contour',
       pipelineVersion: settings.version,
@@ -137,13 +147,20 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   };
 }
 
-function normalizePoints(points) {
-  if (!points.length) return [];
+function normalizeContours(contours) {
+  const sourceContours = (contours || []).map(contour => ({
+    points: (contour.points || contour || []).map(point => ({ x: Number(point.x), y: Number(point.y) })).filter(point => Number.isFinite(point.x) && Number.isFinite(point.y)),
+    closed: contour.closed !== false
+  })).filter(contour => contour.points.length >= 2);
+
+  const allPoints = sourceContours.flatMap(contour => contour.points);
+  if (!allPoints.length) return [];
+
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const point of points) {
+  for (const point of allPoints) {
     minX = Math.min(minX, point.x);
     minY = Math.min(minY, point.y);
     maxX = Math.max(maxX, point.x);
@@ -152,7 +169,23 @@ function normalizePoints(points) {
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   const scale = Math.max(maxX - minX, maxY - minY) || 1;
-  return points.map(point => ({ x: (point.x - cx) / scale, y: (point.y - cy) / scale, breakBefore: Boolean(point.breakBefore) }));
+
+  return sourceContours.map(contour => ({
+    closed: contour.closed,
+    points: closeIfNeeded(contour.points.map(point => ({ x: (point.x - cx) / scale, y: (point.y - cy) / scale })), contour.closed)
+  }));
+}
+
+function closeIfNeeded(points, closed = true) {
+  if (!closed || points.length < 3) return points;
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (samePoint(first, last)) return points;
+  return [...points, { x: first.x, y: first.y }];
+}
+
+function flattenContours(contours) {
+  return (contours || []).flatMap(contour => contour.points || []);
 }
 
 function buildRadialSignature(points, binCount) {
@@ -170,24 +203,26 @@ function buildRadialSignature(points, binCount) {
   return radial.map(value => value / max);
 }
 
-function buildAngleHistogram(points, binCount) {
+function buildAngleHistogram(contours, binCount) {
   const bins = Array.from({ length: binCount }, () => 0);
-  for (let i = 1; i < points.length; i++) {
-    const previous = points[i - 1];
-    const point = points[i];
-    if (point.breakBefore) continue;
-    const angle = Math.atan2(point.y - previous.y, point.x - previous.x);
-    const bin = Math.floor((((angle + Math.PI) / (Math.PI * 2)) * binCount)) % binCount;
-    bins[bin]++;
+  for (const contour of contours || []) {
+    const points = contour.points || [];
+    for (let i = 1; i < points.length; i++) {
+      const previous = points[i - 1];
+      const point = points[i];
+      const angle = Math.atan2(point.y - previous.y, point.x - previous.x);
+      const bin = Math.floor((((angle + Math.PI) / (Math.PI * 2)) * binCount)) % binCount;
+      bins[bin]++;
+    }
   }
   const total = bins.reduce((sum, value) => sum + value, 0) || 1;
   return bins.map(value => value / total);
 }
 
-function buildFilledShape(points, gridSize) {
-  if (points.length < 3) return { points: [], fillRatio: 0 };
-  const contours = splitContours(points).filter(contour => contour.length >= 3);
+function buildFilledShape(contours, gridSize) {
   if (!contours.length) return { points: [], fillRatio: 0 };
+  const validContours = contours.filter(contour => contour.points?.length >= 3);
+  if (!validContours.length) return { points: [], fillRatio: 0 };
   const output = [];
   const step = 1 / gridSize;
   const start = -0.5 + step / 2;
@@ -196,7 +231,7 @@ function buildFilledShape(points, gridSize) {
     const y = start + yIndex * step;
     for (let xIndex = 0; xIndex < gridSize; xIndex++) {
       const x = start + xIndex * step;
-      if (isPointInsideContours(x, y, contours)) output.push({ x, y });
+      if (isPointInsideContours(x, y, validContours)) output.push({ x, y });
     }
   }
 
@@ -209,7 +244,7 @@ function buildFilledShape(points, gridSize) {
 function isPointInsideContours(x, y, contours) {
   let inside = false;
   for (const contour of contours) {
-    if (isPointInsidePolygon(x, y, contour)) inside = !inside;
+    if (isPointInsidePolygon(x, y, contour.points || contour)) inside = !inside;
   }
   return inside;
 }
@@ -295,7 +330,8 @@ function rectanglePoints(width, height) {
     { x: 0, y: 0 },
     { x: width, y: 0 },
     { x: width, y: height },
-    { x: 0, y: height }
+    { x: 0, y: height },
+    { x: 0, y: 0 }
   ];
 }
 
@@ -305,37 +341,19 @@ function simplifyPoints(points, epsilon) {
   for (let i = 1; i < points.length; i++) {
     const previous = output[output.length - 1];
     const point = points[i];
-    if (point.breakBefore || Math.hypot(point.x - previous.x, point.y - previous.y) >= epsilon) output.push(point);
+    if (Math.hypot(point.x - previous.x, point.y - previous.y) >= epsilon) output.push(point);
   }
-  return output;
+  return closeIfNeeded(output, samePoint(points[0], points[points.length - 1]));
 }
 
-function splitContours(points) {
-  const contours = [];
-  let current = [];
-  for (const point of points || []) {
-    if (point.breakBefore && current.length) {
-      contours.push(current);
-      current = [];
-    }
-    current.push(point);
-  }
-  if (current.length) contours.push(current);
-  return contours;
-}
-
-function longestContour(points) {
-  const contours = splitContours(points).map(removeBreakMarkers);
+function longestContour(contours) {
   if (!contours.length) return [];
-  return contours.reduce((best, contour) => contour.length > best.length ? contour : best, contours[0]);
+  const best = contours.reduce((currentBest, contour) => contour.points.length > currentBest.points.length ? contour : currentBest, contours[0]);
+  return best.points || [];
 }
 
-function removeBreakMarkers(points) {
-  return (points || []).map(point => ({ x: point.x, y: point.y }));
-}
-
-function countSubPaths(pathText) {
-  return (String(pathText).match(/[Mm]/g) || []).length;
+function samePoint(a, b) {
+  return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0)) < 1e-9;
 }
 
 function normalize(value, scale) {
