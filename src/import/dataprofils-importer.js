@@ -36,6 +36,7 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
 
   for (let index = 0; index < validProfiles.length; index++) {
     const profile = validProfiles[index];
+    report(onProgress, 58 + (index / validProfiles.length) * 30, 'Generation des signatures', formatImportProgress(index, validProfiles.length, rasterizedCount, rasterFallbackCount, profile, 'en cours'));
     const fingerprint = await buildUnifiedFingerprint({ kind: 'profile', profile }, settings);
     const dna = buildUnifiedDNA(profile, settings);
     enriched.push({ ...profile, fingerprint, dna: { ...dna, descriptors: fingerprint.descriptors, pipelineSettings: settings } });
@@ -44,7 +45,7 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
 
     if (index % 10 === 0 || index === validProfiles.length - 1) {
       const percent = 58 + ((index + 1) / validProfiles.length) * 30;
-      report(onProgress, percent, 'Generation des signatures', `${index + 1} / ${validProfiles.length} · raster ${rasterizedCount} · secours ${rasterFallbackCount}`);
+      report(onProgress, percent, 'Generation des signatures', formatImportProgress(index, validProfiles.length, rasterizedCount, rasterFallbackCount, profile, 'termine'));
       await yieldToBrowser();
     }
   }
@@ -66,6 +67,13 @@ export async function importDataprofilsText(text, onProgress = () => {}, pipelin
     },
     profiles: enriched
   };
+}
+
+function formatImportProgress(index, total, rasterizedCount, rasterFallbackCount, profile, state) {
+  const reference = profile?.reference || 'profil inconnu';
+  const designation = profile?.designation ? ` · ${profile.designation}` : '';
+  const mode = state === 'en cours' ? 'en cours' : 'fait';
+  return `${index + 1} / ${total} · ${reference}${designation} · ${mode} · raster ${rasterizedCount} · secours ${rasterFallbackCount}`;
 }
 
 function report(onProgress, percent, label, detail) {
