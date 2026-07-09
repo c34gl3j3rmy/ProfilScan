@@ -109,10 +109,18 @@
           <button id="compactVisionButton" class="button ghost compact-button">Image compacte</button>
           <button id="cropImageButton" class="button ghost compact-button">Recadrer</button>
           <button id="copyAnalysisReportButton" class="button secondary compact-button">Telecharger rapport</button>
+          <button id="debugPipelineButton" class="button secondary compact-button">Debug pipeline</button>
         </div>
       </div>
       <ol id="resultList"></ol>
       <section id="analysisAdvice" class="advice-panel"></section>
+
+      <section id="debugPipelinePanel" class="debug-pipeline-panel hidden">
+        <h3>Debug pipeline</h3>
+        <p class="hint">Visualisation des etapes deja presentes dans debugPipeline. Objectif : localiser les diagonales, ruptures et sauts avant toute correction.</p>
+        <div id="debugPipelineSummary" class="debug-summary-grid"></div>
+        <div id="debugPipelineStages" class="debug-stage-list"></div>
+      </section>
 
       <details id="debugSettings" class="debug-panel" open>
         <summary>Reglages</summary>
