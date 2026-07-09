@@ -24,17 +24,41 @@ function buildBoundarySet(pixels, mask, width, height) {
 }
 
 function traceSet(boundarySet) {
-  const start = firstPoint(boundarySet);
-  if (!start) return { closed: false, points: [] };
+  const visited = new Set();
+  const points = [];
+  const closedStates = [];
+  let start = firstUnvisitedPoint(boundarySet, visited);
 
+  while (start) {
+    const contour = traceContour(boundarySet, start, visited);
+    if (contour.points.length > 2) {
+      const normalized = contour.points.map((point, index) => ({
+        x: point.x,
+        y: point.y,
+        breakBefore: points.length > 0 && index === 0
+      }));
+      points.push(...normalized);
+      closedStates.push(contour.closed);
+    }
+    start = firstUnvisitedPoint(boundarySet, visited);
+  }
+
+  return {
+    closed: closedStates.length > 0 && closedStates.every(Boolean),
+    points
+  };
+}
+
+function traceContour(boundarySet, start, globalVisited) {
   const contour = [start];
-  const visited = new Set([pointKey(start.x, start.y)]);
+  const startKey = pointKey(start.x, start.y);
+  globalVisited.add(startKey);
   let current = start;
   let direction = 4;
   const maxSteps = Math.min(boundarySet.size * 4, 5000);
 
   for (let step = 0; step < maxSteps; step++) {
-    const next = findNext(current, direction, boundarySet, visited, start, contour.length > 8);
+    const next = findNext(current, direction, boundarySet, globalVisited, start, contour.length > 8);
     if (!next) break;
 
     if (next.x === start.x && next.y === start.y && contour.length > 8) {
@@ -42,12 +66,12 @@ function traceSet(boundarySet) {
     }
 
     contour.push({ x: next.x, y: next.y });
-    visited.add(pointKey(next.x, next.y));
+    globalVisited.add(pointKey(next.x, next.y));
     current = next;
     direction = next.direction;
   }
 
-  return { closed: false, points: contour.length > 2 ? contour : sortPoints([...boundarySet].map(pointFromKey)) };
+  return { closed: false, points: contour };
 }
 
 function findNext(current, previousDirection, boundarySet, visited, start, canClose) {
@@ -133,9 +157,10 @@ function getBounds(pixels, width, height) {
   return { minX, minY, maxX, maxY };
 }
 
-function firstPoint(set) {
+function firstUnvisitedPoint(set, visited) {
   let first = null;
   for (const key of set) {
+    if (visited.has(key)) continue;
     const point = pointFromKey(key);
     if (!first || point.y < first.y || (point.y === first.y && point.x < first.x)) first = point;
   }
@@ -149,14 +174,6 @@ function isBoundary(x, y, mask, width, height) {
     if (xx < 0 || xx >= width || yy < 0 || yy >= height || !mask[yy * width + xx]) return true;
   }
   return false;
-}
-
-function sortPoints(points) {
-  if (points.length <= 2) return points;
-  const center = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
-  center.x /= points.length;
-  center.y /= points.length;
-  return points.sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
 }
 
 function pointKey(x, y) {
