@@ -32,7 +32,8 @@ export async function buildRasterizedProfileFingerprintCore(profile, pipelineSet
   fingerprint.summary.sampleMaxSegmentLength = settings.sampleMaxSegmentLength;
   fingerprint.summary.contourSource = 'svg-outline';
   fingerprint.summary.rasterRole = 'fill-mask-diagnostic';
-  return fingerprint;
+  fingerprint.summary.closedSvgContours = countClosedContours(points);
+  return closeFingerprintContours(fingerprint);
 }
 
 function rasterizeOutline(points, bounds, rasterSize) {
@@ -64,7 +65,7 @@ function rasterizeOutline(points, bounds, rasterSize) {
 
 function resampleSvgOutline(points, targetCount) {
   const contours = splitContours(points)
-    .map(contour => markContourClosure(contour))
+    .map(contour => forceCloseContour(markContourClosure(contour)))
     .filter(contour => contour.length > 2);
 
   if (!contours.length) return [];
@@ -73,15 +74,15 @@ function resampleSvgOutline(points, targetCount) {
   const output = [];
 
   for (const contour of contours) {
-    const count = Math.max(3, Math.round((contourLength(contour) / totalLength) * targetCount));
-    const sampled = contour.closed ? resampleClosedPath(contour, count) : resampleOpenPath(contour, count);
+    const count = Math.max(4, Math.round((contourLength(contour) / totalLength) * targetCount));
+    const sampled = resampleClosedPath(contour, count);
     sampled.forEach((point, index) => output.push({
       ...point,
       breakBefore: output.length > 0 && index === 0
     }));
   }
 
-  return output.slice(0, targetCount);
+  return closeContours(output.slice(0, targetCount));
 }
 
 function markContourClosure(contour) {
@@ -90,11 +91,51 @@ function markContourClosure(contour) {
   return Object.assign([...contour], { closed });
 }
 
+function forceCloseContour(contour) {
+  if (contour.length < 3) return contour;
+  const first = contour[0];
+  const last = contour[contour.length - 1];
+  if (distance(first, last) > 1e-9) contour.push({ x: first.x, y: first.y });
+  contour.closed = true;
+  return contour;
+}
+
+function closeContours(points) {
+  const output = [];
+  for (const contour of splitContours(points)) {
+    if (!contour.length) continue;
+    output.push(...contour);
+    const first = contour[0];
+    const last = contour[contour.length - 1];
+    if (contour.length >= 3 && distance(first, last) > 1e-9) {
+      output.push({ x: first.x, y: first.y, breakBefore: false });
+    }
+  }
+  return output;
+}
+
+function closeFingerprintContours(fingerprint) {
+  const points = closeContours(fingerprint?.descriptors?.points || []);
+  const normalizedPoints = closeContours(fingerprint?.contour?.normalizedPoints || []);
+  if (fingerprint?.descriptors) fingerprint.descriptors.points = points;
+  if (fingerprint?.contour) {
+    fingerprint.contour.normalizedPoints = normalizedPoints;
+    fingerprint.contour.contourCount = splitContours(normalizedPoints).length;
+  }
+  if (fingerprint?.summary) {
+    fingerprint.summary.contourCount = splitContours(normalizedPoints).length;
+    fingerprint.summary.contoursForcedClosed = true;
+  }
+  return fingerprint;
+}
+
+function countClosedContours(points) {
+  return splitContours(points).filter(contour => contour.length >= 3 && distance(contour[0], contour[contour.length - 1]) <= 1e-9).length;
+}
+
 function contourLength(points) {
   let total = 0;
-  const closed = Boolean(points.closed);
-  const limit = closed ? points.length : points.length - 1;
-  for (let index = 1; index <= limit; index++) {
+  for (let index = 1; index <= points.length; index++) {
     const previous = points[index - 1];
     const current = points[index % points.length];
     total += distance(current, previous);
@@ -121,30 +162,6 @@ function resampleClosedPath(points, targetCount) {
     while (segment < distances.length - 1 && distances[segment] < target) segment++;
     const previous = points[segment - 1];
     const current = points[segment % points.length];
-    const segmentLength = distances[segment] - distances[segment - 1] || 1;
-    const t = (target - distances[segment - 1]) / segmentLength;
-    output.push({ x: previous.x + (current.x - previous.x) * t, y: previous.y + (current.y - previous.y) * t });
-  }
-  return output;
-}
-
-function resampleOpenPath(points, targetCount) {
-  if (points.length <= 2) return points;
-  const distances = [0];
-  let total = 0;
-  for (let index = 1; index < points.length; index++) {
-    total += distance(points[index], points[index - 1]);
-    distances.push(total);
-  }
-  if (!total) return points.slice(0, targetCount);
-
-  const output = [];
-  for (let index = 0; index < targetCount; index++) {
-    const target = targetCount === 1 ? 0 : (index / (targetCount - 1)) * total;
-    let segment = 1;
-    while (segment < distances.length - 1 && distances[segment] < target) segment++;
-    const previous = points[segment - 1];
-    const current = points[segment];
     const segmentLength = distances[segment] - distances[segment - 1] || 1;
     const t = (target - distances[segment - 1]) / segmentLength;
     output.push({ x: previous.x + (current.x - previous.x) * t, y: previous.y + (current.y - previous.y) * t });
