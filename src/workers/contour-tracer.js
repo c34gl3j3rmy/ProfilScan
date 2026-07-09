@@ -10,6 +10,7 @@ export function traceBoundary(pixels, mask, width, height) {
 
   return {
     closed: exterior.closed,
+    contours: exterior.contours,
     points: exterior.points,
     holes
   };
@@ -25,27 +26,24 @@ function buildBoundarySet(pixels, mask, width, height) {
 
 function traceSet(boundarySet) {
   const visited = new Set();
-  const points = [];
-  const closedStates = [];
+  const contours = [];
   let start = firstUnvisitedPoint(boundarySet, visited);
 
   while (start) {
     const contour = traceContour(boundarySet, start, visited);
     if (contour.points.length > 2) {
-      const normalized = contour.points.map((point, index) => ({
-        x: point.x,
-        y: point.y,
-        breakBefore: points.length > 0 && index === 0
-      }));
-      points.push(...normalized);
-      closedStates.push(contour.closed);
+      contours.push({
+        closed: contour.closed,
+        points: contour.closed ? closePoints(contour.points) : contour.points
+      });
     }
     start = firstUnvisitedPoint(boundarySet, visited);
   }
 
   return {
-    closed: closedStates.length > 0 && closedStates.every(Boolean),
-    points
+    closed: contours.length > 0 && contours.every(contour => contour.closed),
+    contours,
+    points: contours.flatMap(contour => contour.points)
   };
 }
 
@@ -103,7 +101,7 @@ function findHoleContours(pixels, mask, width, height) {
       if (region.touchesBorder || region.points.length < 8) continue;
 
       const contour = traceSet(buildHoleBoundarySet(region.points, mask, width, height));
-      if (contour.points.length > 2) holes.push({ closed: contour.closed, points: contour.points });
+      if (contour.points.length > 2) holes.push({ closed: contour.closed, contours: contour.contours, points: contour.points });
     }
   }
 
@@ -146,6 +144,14 @@ function buildHoleBoundarySet(backgroundPoints, mask, width, height) {
     }
   }
   return set;
+}
+
+function closePoints(points) {
+  if (points.length < 3) return points;
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (first.x === last.x && first.y === last.y) return points;
+  return [...points, { x: first.x, y: first.y }];
 }
 
 function getBounds(pixels, width, height) {
