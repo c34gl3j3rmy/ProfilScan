@@ -281,7 +281,7 @@ function endpointArcToCenter(from, to, rx, ry, rotationDegrees, largeArc, sweep)
 }
 
 function vectorAngle(a, b) {
-  const dot = a.x * b.x + b.y * a.y;
+  const dot = a.x * b.x + a.y * b.y;
   const det = a.x * b.y - a.y * b.x;
   return Math.atan2(det, dot);
 }
