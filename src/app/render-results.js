@@ -1,4 +1,6 @@
 export function renderResults(result) {
+  publishRenderedResult(result);
+
   const canvas = document.querySelector('#resultCanvas');
   canvas.style.filter = 'none';
   const ctx = canvas.getContext('2d');
@@ -33,6 +35,11 @@ export function renderResults(result) {
     list.appendChild(li);
   }
   renderAdvice(result, items, contours, closedCount);
+}
+
+function publishRenderedResult(result) {
+  window.__profilScanLastResult = result;
+  window.dispatchEvent(new CustomEvent('profilscan:result-rendered', { detail: { result } }));
 }
 
 function renderItem(item) {

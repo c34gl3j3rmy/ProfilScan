@@ -83,6 +83,84 @@ progress { width: 100%; height: 20px; margin: 14px 0 8px; }
 .range-row output { color: var(--info); font-variant-numeric: tabular-nums; }
 .range-row input { grid-column: 1 / -1; width: 100%; }
 
+.debug-pipeline-panel {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 18px;
+  background: #f9fafb;
+}
+
+.debug-pipeline-panel h3 { margin: 0 0 8px; }
+
+.debug-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.debug-summary-card {
+  padding: 12px;
+  border: 1px solid var(--secondary);
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.debug-summary-card span,
+.debug-summary-card small { display: block; color: var(--muted); }
+.debug-summary-card strong { display: block; margin: 4px 0; font-size: 1.15rem; }
+
+.debug-stage-list {
+  display: grid;
+  gap: 14px;
+}
+
+.debug-stage-card {
+  padding: 14px;
+  border: 1px solid var(--secondary);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.debug-stage-card header {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.debug-stage-card h4 { margin: 0 0 4px; }
+.debug-stage-card p { margin: 0; color: var(--muted); }
+.debug-stage-card details { color: var(--muted); font-size: .86rem; }
+.debug-stage-card summary { cursor: pointer; font-weight: 800; }
+.debug-stage-card pre {
+  max-height: 240px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 12px;
+  background: #f3f4f6;
+  color: var(--text);
+  font-size: .78rem;
+}
+
+.debug-stage-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 70vh;
+  margin-top: 10px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid var(--secondary);
+}
+
+.debug-bar-canvas { max-height: 240px; }
+.debug-empty { padding: 14px; border: 1px dashed var(--secondary); border-radius: 14px; background: #ffffff; color: var(--muted); }
+.debug-matching-list ol { margin: 8px 0 0; padding-left: 22px; }
+.debug-matching-list li { margin: 8px 0; }
+.debug-matching-list span { display: block; color: var(--muted); font-size: .9rem; }
+
 #resultList { padding-left: 22px; }
 #resultList li { margin: 10px 0; }
 .score-details { margin-top: 8px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .82rem; }
@@ -90,3 +168,14 @@ progress { width: 100%; height: 20px; margin: 14px 0 8px; }
 .uncertainty-card strong, .uncertainty-card span, .uncertainty-card small { display: block; }
 .uncertainty-card small { margin-top: 4px; color: #b45309; }
 .close-candidate { background: #fffbeb; font-weight: 800; }
+
+@media (min-width: 860px) {
+  .app-shell { max-width: 920px; }
+  .debug-stage-card header { grid-template-columns: 1fr auto; align-items: start; }
+}
+
+@media (max-width: 520px) {
+  .app-shell { padding: 12px; }
+  .debug-summary-grid { grid-template-columns: 1fr; }
+  .vision-actions { grid-template-columns: 1fr; }
+}
