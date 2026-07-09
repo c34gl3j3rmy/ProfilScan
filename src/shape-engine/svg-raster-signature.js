@@ -95,10 +95,16 @@ function orderBoundaryContours(points, pointSet) {
       current = next;
     }
 
-    if (contour.length > 2) contours.push(contour);
+    if (contour.length > 2) contours.push(markContourClosure(contour));
   }
 
   return contours;
+}
+
+function markContourClosure(contour) {
+  const jumpLimit = estimateJumpLimit(contour);
+  const closed = distance(contour[0], contour[contour.length - 1]) <= jumpLimit;
+  return Object.assign(contour, { closed });
 }
 
 function firstRemainingPoint(remaining) {
@@ -117,9 +123,9 @@ function findNextNeighbor(point, remaining, pointSet) {
       if (dx === 0 && dy === 0) continue;
       const candidateKey = `${point.x + dx},${point.y + dy}`;
       if (!pointSet.has(candidateKey) || !remaining.has(candidateKey)) continue;
-      const distance = dx * dx + dy * dy;
-      if (distance < bestDistance) {
-        bestDistance = distance;
+      const distanceValue = dx * dx + dy * dy;
+      if (distanceValue < bestDistance) {
+        bestDistance = distanceValue;
         best = remaining.get(candidateKey);
       }
     }
@@ -135,7 +141,7 @@ function resampleContours(contours, targetCount) {
 
   for (const contour of validContours) {
     const count = Math.max(3, Math.round((contourLength(contour) / totalLength) * targetCount));
-    const sampled = resampleClosedPath(contour, count);
+    const sampled = contour.closed ? resampleClosedPath(contour, count) : resampleOpenPath(contour, count);
     sampled.forEach((point, index) => output.push({ ...point, breakBefore: output.length > 0 && index === 0 }));
   }
 
@@ -144,10 +150,12 @@ function resampleContours(contours, targetCount) {
 
 function contourLength(points) {
   let total = 0;
-  for (let index = 1; index <= points.length; index++) {
+  const closed = Boolean(points.closed);
+  const limit = closed ? points.length : points.length - 1;
+  for (let index = 1; index <= limit; index++) {
     const previous = points[index - 1];
     const current = points[index % points.length];
-    total += Math.hypot(current.x - previous.x, current.y - previous.y);
+    total += distance(current, previous);
   }
   return total;
 }
@@ -159,7 +167,7 @@ function resampleClosedPath(points, targetCount) {
   for (let index = 1; index <= points.length; index++) {
     const previous = points[index - 1];
     const current = points[index % points.length];
-    total += Math.hypot(current.x - previous.x, current.y - previous.y);
+    total += distance(current, previous);
     distances.push(total);
   }
   if (!total) return points.slice(0, targetCount);
@@ -176,6 +184,46 @@ function resampleClosedPath(points, targetCount) {
     output.push({ x: previous.x + (current.x - previous.x) * t, y: previous.y + (current.y - previous.y) * t });
   }
   return output;
+}
+
+function resampleOpenPath(points, targetCount) {
+  if (points.length <= 2) return points;
+  const distances = [0];
+  let total = 0;
+  for (let index = 1; index < points.length; index++) {
+    total += distance(points[index], points[index - 1]);
+    distances.push(total);
+  }
+  if (!total) return points.slice(0, targetCount);
+
+  const output = [];
+  for (let index = 0; index < targetCount; index++) {
+    const target = targetCount === 1 ? 0 : (index / (targetCount - 1)) * total;
+    let segment = 1;
+    while (segment < distances.length - 1 && distances[segment] < target) segment++;
+    const previous = points[segment - 1];
+    const current = points[segment];
+    const segmentLength = distances[segment] - distances[segment - 1] || 1;
+    const t = (target - distances[segment - 1]) / segmentLength;
+    output.push({ x: previous.x + (current.x - previous.x) * t, y: previous.y + (current.y - previous.y) * t });
+  }
+  return output;
+}
+
+function estimateJumpLimit(points) {
+  if (!points || points.length < 3) return 2;
+  const distances = [];
+  for (let index = 1; index < points.length; index++) {
+    const value = distance(points[index], points[index - 1]);
+    if (value > 0) distances.push(value);
+  }
+  distances.sort((a, b) => a - b);
+  const median = distances[Math.floor(distances.length / 2)] || 1;
+  return Math.max(2.5, median * 3.5);
+}
+
+function distance(a, b) {
+  return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0));
 }
 
 function splitContours(points) {
