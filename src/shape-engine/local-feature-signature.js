@@ -59,7 +59,7 @@ function normalizeInput(points) {
   if (!Array.isArray(points)) return [];
   return points
     .filter(point => Number.isFinite(point?.x) && Number.isFinite(point?.y))
-    .map(point => ({ x: Number(point.x), y: Number(point.y) }));
+    .map(point => ({ x: Number(point.x), y: Number(point.y), breakBefore: Boolean(point.breakBefore) }));
 }
 
 function buildSegments(points) {
@@ -67,6 +67,7 @@ function buildSegments(points) {
   for (let i = 1; i < points.length; i++) {
     const start = points[i - 1];
     const end = points[i];
+    if (end.breakBefore) continue;
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const length = Math.hypot(dx, dy);
@@ -108,6 +109,7 @@ function buildTurns(points) {
     const a = points[i - 1];
     const b = points[i];
     const c = points[i + 1];
+    if (b.breakBefore || c.breakBefore) continue;
     const previous = Math.atan2(b.y - a.y, b.x - a.x);
     const next = Math.atan2(c.y - b.y, c.x - b.x);
     let delta = Math.abs(next - previous);
@@ -220,24 +222,24 @@ function buildOrientationHistogram(segments, binCount) {
     bins[bin] += segment.length;
     total += segment.length;
   }
-  return normalizeBins(bins, total);
+  return bins.map(value => total ? round(value / total) : 0);
 }
 
 function buildLengthHistogram(segments, binCount) {
+  const lengths = segments.map(segment => segment.length);
+  const max = Math.max(...lengths, 1e-6);
   const bins = Array.from({ length: binCount }, () => 0);
-  const maxLength = Math.max(...segments.map(segment => segment.length), 1);
-  for (const segment of segments) {
-    const bin = Math.min(binCount - 1, Math.floor((segment.length / maxLength) * binCount));
+  for (const length of lengths) {
+    const bin = Math.min(binCount - 1, Math.floor((length / max) * binCount));
     bins[bin]++;
   }
-  return normalizeBins(bins, segments.length || 1);
+  return bins.map(value => round(value / Math.max(segments.length, 1)));
 }
 
 function compareHistogram(a = [], b = []) {
   const length = Math.min(a.length, b.length);
   if (!length) return 0;
-  let distance = 0;
-  for (let i = 0; i < length; i++) distance += Math.abs((Number(a[i]) || 0) - (Number(b[i]) || 0));
+  const distance = Array.from({ length }, (_, index) => Math.abs((a[index] || 0) - (b[index] || 0))).reduce((sum, value) => sum + value, 0);
   return clampScore(100 * (1 - distance / 2));
 }
 
@@ -253,15 +255,7 @@ function zoneBounds(column, row) {
 }
 
 function inBounds(point, bounds) {
-  return point.x >= bounds.xMin && point.x <= bounds.xMax && point.y >= bounds.yMin && point.y <= bounds.yMax;
-}
-
-function isHorizontal(angle) {
-  return angle < Math.PI / 12 || angle > Math.PI * 11 / 12;
-}
-
-function isVertical(angle) {
-  return Math.abs(angle - Math.PI / 2) < Math.PI / 12;
+  return point.x >= bounds.xMin && point.x < bounds.xMax && point.y >= bounds.yMin && point.y < bounds.yMax;
 }
 
 function totalLength(segments) {
@@ -269,26 +263,30 @@ function totalLength(segments) {
 }
 
 function percentile(values, ratio) {
-  const clean = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!clean.length) return null;
-  return clean[Math.min(clean.length - 1, Math.max(0, Math.floor(clean.length * ratio)))];
+  const sorted = values.filter(value => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * ratio)));
+  return sorted[index];
 }
 
-function normalizeBins(bins, total) {
-  const safeTotal = total || bins.reduce((sum, value) => sum + value, 0) || 1;
-  return bins.map(value => round(value / safeTotal));
+function isHorizontal(angle) {
+  return angle < Math.PI / 8 || angle > Math.PI * 7 / 8;
+}
+
+function isVertical(angle) {
+  return Math.abs(angle - Math.PI / 2) < Math.PI / 8;
 }
 
 function normalizeHalfTurn(angle) {
-  let value = angle % Math.PI;
+  let value = Math.abs(angle) % Math.PI;
   if (value < 0) value += Math.PI;
   return value;
 }
 
-function clampScore(score) {
-  return Math.max(0, Math.min(100, Number(score) || 0));
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
 }
 
 function round(value) {
-  return Math.round(value * 1000000) / 1000000;
+  return Math.round((Number(value) || 0) * 1000) / 1000;
 }
