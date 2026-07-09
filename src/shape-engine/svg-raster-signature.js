@@ -11,7 +11,7 @@ export async function buildRasterizedProfileFingerprintCore(profile, pipelineSet
 
   const rasterSize = Math.max(384, settings.fillGridSize * 4);
   const mask = rasterizeOutline(outline, bounds, rasterSize);
-  const points = extractOrderedBoundaryPoints(mask, rasterSize, rasterSize, settings.contourPointCount);
+  const points = resampleSvgOutline(outline, settings.contourPointCount);
   if (!points.length) return null;
 
   const fingerprint = buildDetectedFingerprintCore({
@@ -30,6 +30,8 @@ export async function buildRasterizedProfileFingerprintCore(profile, pipelineSet
   fingerprint.summary.rasterContours = splitContours(points).length;
   fingerprint.summary.arcSampler = 'svg-path-sampler';
   fingerprint.summary.sampleMaxSegmentLength = settings.sampleMaxSegmentLength;
+  fingerprint.summary.contourSource = 'svg-outline';
+  fingerprint.summary.rasterRole = 'fill-mask-diagnostic';
   return fingerprint;
 }
 
@@ -60,92 +62,32 @@ function rasterizeOutline(points, bounds, rasterSize) {
   return mask;
 }
 
-function extractOrderedBoundaryPoints(mask, width, height, targetCount) {
-  const boundary = [];
-  const boundarySet = new Set();
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const index = y * width + x;
-      if (!mask[index]) continue;
-      if (!mask[index - 1] || !mask[index + 1] || !mask[index - width] || !mask[index + width]) {
-        const point = { x, y };
-        boundary.push(point);
-        boundarySet.add(key(point));
-      }
-    }
-  }
-  const contours = orderBoundaryContours(boundary, boundarySet);
-  return resampleContours(contours, targetCount);
-}
+function resampleSvgOutline(points, targetCount) {
+  const contours = splitContours(points)
+    .map(contour => markContourClosure(contour))
+    .filter(contour => contour.length > 2);
 
-function orderBoundaryContours(points, pointSet) {
-  if (points.length <= 2) return [points];
-  const remaining = new Map(points.map(point => [key(point), point]));
-  const contours = [];
+  if (!contours.length) return [];
 
-  while (remaining.size) {
-    let current = firstRemainingPoint(remaining);
-    const contour = [];
+  const totalLength = contours.reduce((sum, contour) => sum + contourLength(contour), 0) || 1;
+  const output = [];
 
-    while (current) {
-      contour.push(current);
-      remaining.delete(key(current));
-      const next = findNextNeighbor(current, remaining, pointSet);
-      if (!next) break;
-      current = next;
-    }
-
-    if (contour.length > 2) contours.push(markContourClosure(contour));
+  for (const contour of contours) {
+    const count = Math.max(3, Math.round((contourLength(contour) / totalLength) * targetCount));
+    const sampled = contour.closed ? resampleClosedPath(contour, count) : resampleOpenPath(contour, count);
+    sampled.forEach((point, index) => output.push({
+      ...point,
+      breakBefore: output.length > 0 && index === 0
+    }));
   }
 
-  return contours;
+  return output.slice(0, targetCount);
 }
 
 function markContourClosure(contour) {
   const jumpLimit = estimateJumpLimit(contour);
   const closed = distance(contour[0], contour[contour.length - 1]) <= jumpLimit;
-  return Object.assign(contour, { closed });
-}
-
-function firstRemainingPoint(remaining) {
-  let first = null;
-  for (const point of remaining.values()) {
-    if (!first || point.y < first.y || (point.y === first.y && point.x < first.x)) first = point;
-  }
-  return first;
-}
-
-function findNextNeighbor(point, remaining, pointSet) {
-  let best = null;
-  let bestDistance = Infinity;
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      const candidateKey = `${point.x + dx},${point.y + dy}`;
-      if (!pointSet.has(candidateKey) || !remaining.has(candidateKey)) continue;
-      const distanceValue = dx * dx + dy * dy;
-      if (distanceValue < bestDistance) {
-        bestDistance = distanceValue;
-        best = remaining.get(candidateKey);
-      }
-    }
-  }
-  return best;
-}
-
-function resampleContours(contours, targetCount) {
-  const validContours = contours.filter(contour => contour.length > 2);
-  if (!validContours.length) return [];
-  const totalLength = validContours.reduce((sum, contour) => sum + contourLength(contour), 0) || 1;
-  const output = [];
-
-  for (const contour of validContours) {
-    const count = Math.max(3, Math.round((contourLength(contour) / totalLength) * targetCount));
-    const sampled = contour.closed ? resampleClosedPath(contour, count) : resampleOpenPath(contour, count);
-    sampled.forEach((point, index) => output.push({ ...point, breakBefore: output.length > 0 && index === 0 }));
-  }
-
-  return output.slice(0, targetCount);
+  return Object.assign([...contour], { closed });
 }
 
 function contourLength(points) {
@@ -211,15 +153,15 @@ function resampleOpenPath(points, targetCount) {
 }
 
 function estimateJumpLimit(points) {
-  if (!points || points.length < 3) return 2;
+  if (!points || points.length < 3) return 0.01;
   const distances = [];
   for (let index = 1; index < points.length; index++) {
     const value = distance(points[index], points[index - 1]);
     if (value > 0) distances.push(value);
   }
   distances.sort((a, b) => a - b);
-  const median = distances[Math.floor(distances.length / 2)] || 1;
-  return Math.max(2.5, median * 3.5);
+  const median = distances[Math.floor(distances.length / 2)] || 0.01;
+  return Math.max(0.01, median * 8);
 }
 
 function distance(a, b) {
@@ -246,10 +188,6 @@ function isPointInsideContours(x, y, contours) {
     if (isPointInsidePolygon(x, y, contour)) inside = !inside;
   }
   return inside;
-}
-
-function key(point) {
-  return `${Math.round(point.x)},${Math.round(point.y)}`;
 }
 
 function countMask(mask) {
