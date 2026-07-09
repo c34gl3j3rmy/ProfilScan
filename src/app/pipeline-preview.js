@@ -9,7 +9,9 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
   ctx.fillStyle = '#f9fafb';
   ctx.fillRect(0, 0, size, size);
 
-  const points = fingerprint?.descriptors?.points || fingerprint?.contour?.normalizedPoints || [];
+  const contourPoints = fingerprint?.contour?.normalizedPoints || [];
+  const signaturePoints = fingerprint?.descriptors?.points || contourPoints;
+  const points = contourPoints.length ? contourPoints : signaturePoints;
   if (!points.length) {
     drawGrid(ctx, size, 8);
     drawMessage(ctx, size, 'Aucun point signature');
@@ -22,10 +24,10 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
     y: size / 2 - point.y * scale
   });
 
-  drawMaterialGrid(ctx, size, points, fingerprint?.pipelineSettings?.fillGridSize || fingerprint?.summary?.fillGridSize || 96);
+  drawMaterialGrid(ctx, size, contourPoints, fingerprint?.pipelineSettings?.fillGridSize || fingerprint?.summary?.fillGridSize || 96);
   drawGrid(ctx, size, visibleGridCount(fingerprint?.pipelineSettings?.fillGridSize || 96));
-  drawContour(ctx, points, toCanvas, size);
-  drawPoints(ctx, points, toCanvas, size);
+  drawContour(ctx, contourPoints, toCanvas, size);
+  drawSignaturePoints(ctx, signaturePoints, toCanvas, size);
   drawBreakMarkers(ctx, points, toCanvas, size);
   drawCaption(ctx, size, profile, fingerprint);
 }
@@ -104,11 +106,11 @@ function visibleGridCount(fillGridSize) {
   return 64;
 }
 
-function drawPoints(ctx, points, toCanvas, size) {
+function drawSignaturePoints(ctx, points, toCanvas, size) {
   ctx.save();
-  ctx.fillStyle = '#dc2626';
-  const radius = Math.max(1.5, size / 140);
-  const stride = Math.max(1, Math.floor(points.length / 160));
+  ctx.fillStyle = 'rgba(220, 38, 38, 0.42)';
+  const radius = Math.max(0.9, size / 260);
+  const stride = Math.max(1, Math.floor(points.length / 220));
   for (let index = 0; index < points.length; index += stride) {
     const point = toCanvas(points[index]);
     ctx.beginPath();
@@ -136,7 +138,8 @@ function drawCaption(ctx, size, profile, fingerprint) {
   const gridSize = fingerprint?.pipelineSettings?.fillGridSize || summary.fillGridSize || '?';
   const segment = summary.sampleMaxSegmentLength ? ` · pas ${summary.sampleMaxSegmentLength} mm` : '';
   const contours = summary.contourCount ? ` · ${summary.contourCount} contours` : '';
-  const text = `${profile?.reference || ''} · ${summary.huSource || 'signature'} · grille ${gridSize} · remplissage ${Math.round((summary.fillRatio || 0) * 1000) / 10}%${segment}${contours}`;
+  const mode = summary.pipelineMode ? ` · ${summary.pipelineMode}` : '';
+  const text = `${profile?.reference || ''} · ${summary.huSource || 'signature'}${mode} · grille ${gridSize} · remplissage ${Math.round((summary.fillRatio || 0) * 1000) / 10}%${segment}${contours}`;
   ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
   ctx.fillRect(0, size - 30, size, 30);
   ctx.fillStyle = '#111827';
