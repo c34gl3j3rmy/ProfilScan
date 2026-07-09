@@ -1,8 +1,13 @@
 export function sampleSvgPathPolyline(pathText, options = {}) {
+  return flattenContours(sampleSvgPathContours(pathText, options));
+}
+
+export function sampleSvgPathContours(pathText, options = {}) {
   const tokens = tokenizePath(pathText);
   const maxSegmentLength = clampPositive(options.maxSegmentLength, 0.8);
   const minSteps = Math.max(1, Math.round(options.minSteps ?? 1));
-  const points = [];
+  const contours = [];
+  let contour = [];
   let index = 0;
   let command = '';
   let current = { x: 0, y: 0 };
@@ -16,16 +21,17 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     const relative = command !== upper;
 
     if (upper === 'M') {
+      pushCurrentContour(contours, contour, false);
       current = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
       start = current;
-      points.push({ ...current, breakBefore: points.length > 0 });
+      contour = [{ ...current }];
       command = relative ? 'l' : 'L';
       continue;
     }
 
     if (upper === 'L') {
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, maxSegmentLength, minSteps);
+      pushLine(contour, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -33,7 +39,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     if (upper === 'H') {
       const x = readNumber(tokens, index++);
       const next = { x: relative ? current.x + x : x, y: current.y };
-      pushLine(points, current, next, maxSegmentLength, minSteps);
+      pushLine(contour, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -41,7 +47,7 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     if (upper === 'V') {
       const y = readNumber(tokens, index++);
       const next = { x: current.x, y: relative ? current.y + y : y };
-      pushLine(points, current, next, maxSegmentLength, minSteps);
+      pushLine(contour, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
@@ -53,37 +59,49 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
       const largeArcFlag = readNumber(tokens, index++);
       const sweepFlag = readNumber(tokens, index++);
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushArc(points, current, next, rx, ry, xAxisRotation, largeArcFlag, sweepFlag, maxSegmentLength, minSteps);
+      pushArc(contour, current, next, rx, ry, xAxisRotation, largeArcFlag, sweepFlag, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
 
     if (upper === 'C') {
-      index += 4;
+      const c1 = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
+      const c2 = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, maxSegmentLength, minSteps);
+      pushCubic(contour, current, c1, c2, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
 
-    if (upper === 'S' || upper === 'Q') {
+    if (upper === 'S') {
       index += 2;
+      const c2 = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, maxSegmentLength, minSteps);
+      pushQuadraticLike(contour, current, c2, next, maxSegmentLength, minSteps);
+      current = next;
+      continue;
+    }
+
+    if (upper === 'Q') {
+      const control = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
+      const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
+      pushQuadraticLike(contour, current, control, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
 
     if (upper === 'T') {
       const next = resolvePoint(readNumber(tokens, index++), readNumber(tokens, index++), current, relative);
-      pushLine(points, current, next, maxSegmentLength, minSteps);
+      pushLine(contour, current, next, maxSegmentLength, minSteps);
       current = next;
       continue;
     }
 
     if (upper === 'Z') {
-      pushLine(points, current, start, maxSegmentLength, minSteps);
+      pushLine(contour, current, start, maxSegmentLength, minSteps);
       current = start;
+      pushCurrentContour(contours, contour, true);
+      contour = [];
       command = '';
       continue;
     }
@@ -91,7 +109,41 @@ export function sampleSvgPathPolyline(pathText, options = {}) {
     index++;
   }
 
-  return points;
+  pushCurrentContour(contours, contour, false);
+  return contours;
+}
+
+function flattenContours(contours) {
+  const output = [];
+  for (const contour of contours || []) {
+    const points = contour.points || [];
+    points.forEach((point, index) => output.push({
+      x: point.x,
+      y: point.y,
+      breakBefore: output.length > 0 && index === 0,
+      closed: Boolean(contour.closed)
+    }));
+  }
+  return output;
+}
+
+function pushCurrentContour(contours, contour, closed) {
+  if (!contour?.length) return;
+  const points = normalizeContourClosure(contour, closed);
+  if (points.length < 2) return;
+  contours.push({
+    points,
+    closed: Boolean(closed || samePoint(points[0], points[points.length - 1])),
+    source: 'svg-subpath'
+  });
+}
+
+function normalizeContourClosure(points, closed) {
+  const output = points.map(point => ({ x: point.x, y: point.y }));
+  if (closed && output.length && !samePoint(output[0], output[output.length - 1])) {
+    output.push({ ...output[0] });
+  }
+  return output;
 }
 
 function tokenizePath(pathText) {
@@ -117,6 +169,32 @@ function pushLine(points, from, to, maxSegmentLength, minSteps) {
   for (let index = 1; index <= steps; index++) {
     const t = index / steps;
     points.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t });
+  }
+}
+
+function pushCubic(points, from, c1, c2, to, maxSegmentLength, minSteps) {
+  const estimatedLength = Math.hypot(c1.x - from.x, c1.y - from.y) + Math.hypot(c2.x - c1.x, c2.y - c1.y) + Math.hypot(to.x - c2.x, to.y - c2.y);
+  const steps = Math.max(6, minSteps, Math.ceil(estimatedLength / maxSegmentLength));
+  for (let index = 1; index <= steps; index++) {
+    const t = index / steps;
+    const mt = 1 - t;
+    points.push({
+      x: mt ** 3 * from.x + 3 * mt ** 2 * t * c1.x + 3 * mt * t ** 2 * c2.x + t ** 3 * to.x,
+      y: mt ** 3 * from.y + 3 * mt ** 2 * t * c1.y + 3 * mt * t ** 2 * c2.y + t ** 3 * to.y
+    });
+  }
+}
+
+function pushQuadraticLike(points, from, control, to, maxSegmentLength, minSteps) {
+  const estimatedLength = Math.hypot(control.x - from.x, control.y - from.y) + Math.hypot(to.x - control.x, to.y - control.y);
+  const steps = Math.max(4, minSteps, Math.ceil(estimatedLength / maxSegmentLength));
+  for (let index = 1; index <= steps; index++) {
+    const t = index / steps;
+    const mt = 1 - t;
+    points.push({
+      x: mt ** 2 * from.x + 2 * mt * t * control.x + t ** 2 * to.x,
+      y: mt ** 2 * from.y + 2 * mt * t * control.y + t ** 2 * to.y
+    });
   }
 }
 
