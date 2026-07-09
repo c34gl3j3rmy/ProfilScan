@@ -31,6 +31,7 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
 
 function drawMaterialGrid(ctx, size, points, gridSize) {
   const normalizedGridSize = clampGridSize(gridSize);
+  const contours = splitContours(points).filter(contour => contour.length >= 3);
   const cellSize = size / normalizedGridSize;
   const step = 1 / normalizedGridSize;
   const start = -0.5 + step / 2;
@@ -42,7 +43,7 @@ function drawMaterialGrid(ctx, size, points, gridSize) {
     const y = start + yIndex * step;
     for (let xIndex = 0; xIndex < normalizedGridSize; xIndex++) {
       const x = start + xIndex * step;
-      if (!isPointInsidePolygon(x, y, points)) continue;
+      if (!isPointInsideContours(x, y, contours)) continue;
       ctx.fillRect(xIndex * cellSize, (normalizedGridSize - 1 - yIndex) * cellSize, Math.max(0.8, cellSize), Math.max(0.8, cellSize));
     }
   }
@@ -52,16 +53,21 @@ function drawMaterialGrid(ctx, size, points, gridSize) {
 
 function drawContour(ctx, points, toCanvas, size) {
   ctx.save();
-  ctx.beginPath();
-  points.forEach((point, index) => {
-    const canvasPoint = toCanvas(point);
-    if (index === 0) ctx.moveTo(canvasPoint.x, canvasPoint.y);
-    else ctx.lineTo(canvasPoint.x, canvasPoint.y);
-  });
-  ctx.closePath();
   ctx.strokeStyle = '#111827';
   ctx.lineWidth = Math.max(1.5, size / 180);
-  ctx.stroke();
+
+  for (const contour of splitContours(points)) {
+    if (contour.length < 2) continue;
+    ctx.beginPath();
+    contour.forEach((point, index) => {
+      const canvasPoint = toCanvas(point);
+      if (index === 0) ctx.moveTo(canvasPoint.x, canvasPoint.y);
+      else ctx.lineTo(canvasPoint.x, canvasPoint.y);
+    });
+    if (isClosedContour(contour)) ctx.closePath();
+    ctx.stroke();
+  }
+
   ctx.restore();
 }
 
@@ -108,7 +114,8 @@ function drawCaption(ctx, size, profile, fingerprint) {
   const summary = fingerprint?.summary || {};
   const gridSize = fingerprint?.pipelineSettings?.fillGridSize || summary.fillGridSize || '?';
   const segment = summary.sampleMaxSegmentLength ? ` · pas ${summary.sampleMaxSegmentLength} mm` : '';
-  const text = `${profile?.reference || ''} · ${summary.huSource || 'signature'} · grille ${gridSize} · remplissage ${Math.round((summary.fillRatio || 0) * 1000) / 10}%${segment}`;
+  const contours = summary.contourCount ? ` · ${summary.contourCount} contours` : '';
+  const text = `${profile?.reference || ''} · ${summary.huSource || 'signature'} · grille ${gridSize} · remplissage ${Math.round((summary.fillRatio || 0) * 1000) / 10}%${segment}${contours}`;
   ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
   ctx.fillRect(0, size - 30, size, 30);
   ctx.fillStyle = '#111827';
@@ -124,6 +131,35 @@ function drawMessage(ctx, size, message) {
   ctx.textAlign = 'center';
   ctx.fillText(message, size / 2, size / 2);
   ctx.restore();
+}
+
+function splitContours(points) {
+  const contours = [];
+  let current = [];
+  for (const point of points || []) {
+    if (point.breakBefore && current.length) {
+      contours.push(current);
+      current = [];
+    }
+    current.push(point);
+  }
+  if (current.length) contours.push(current);
+  return contours;
+}
+
+function isClosedContour(points) {
+  if (points.length < 3) return false;
+  const first = points[0];
+  const last = points[points.length - 1];
+  return Math.hypot(first.x - last.x, first.y - last.y) < 0.01;
+}
+
+function isPointInsideContours(x, y, contours) {
+  let inside = false;
+  for (const contour of contours) {
+    if (isPointInsidePolygon(x, y, contour)) inside = !inside;
+  }
+  return inside;
 }
 
 function isPointInsidePolygon(x, y, points) {
