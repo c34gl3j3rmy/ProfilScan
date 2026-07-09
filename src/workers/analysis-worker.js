@@ -54,8 +54,9 @@ self.onmessage = async event => {
       contours: objects.map(object => ({
         closed: object.closed,
         sectionScore: object.sectionScore || 0,
+        contours: sampleContours(object.contours || [], 180),
         points: simplifyContourPoints(object.points, 180),
-        holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: simplifyContourPoints(hole.points, 120) }))
+        holes: (object.holes || []).map(hole => ({ closed: hole.closed, contours: sampleContours(hole.contours || [], 120), points: simplifyContourPoints(hole.points, 120) }))
       })),
       debugPipeline
     };
@@ -158,27 +159,38 @@ function findComponents(mask, width, height) {
       height: maxY - minY + 1,
       area: count,
       closed: contour.closed,
+      contours: simplifyContours(contour.contours || [], 240),
       points: simplifyContourPoints(contour.points, 240),
-      holes: (contour.holes || []).map(hole => ({ closed: hole.closed, points: simplifyContourPoints(hole.points, 160) }))
+      holes: (contour.holes || []).map(hole => ({ closed: hole.closed, contours: simplifyContours(hole.contours || [], 160), points: simplifyContourPoints(hole.points, 160) }))
     });
   }
   return components;
 }
 
+function simplifyContours(contours, maxPoints) {
+  const source = contours || [];
+  const total = source.reduce((sum, contour) => sum + (contour.points?.length || 0), 0) || 1;
+  return source.map(contour => ({
+    closed: contour.closed !== false,
+    points: samplePointList(contour.points || [], Math.max(2, Math.round(((contour.points?.length || 0) / total) * maxPoints)))
+  })).filter(contour => contour.points.length >= 2);
+}
+
 function simplifyContourPoints(points, maxPoints) {
   if (!Array.isArray(points) || points.length <= maxPoints) return points || [];
-  const contours = splitContours(points);
-  const total = contours.reduce((sum, contour) => sum + contour.length, 0) || 1;
+  return samplePointList(points, maxPoints);
+}
+
+function samplePointList(points, maxPoints) {
+  if (!Array.isArray(points) || !points.length) return [];
+  const count = Math.max(1, Math.min(maxPoints, points.length));
+  const step = Math.max(1, points.length / count);
   const output = [];
-  for (const contour of contours) {
-    const count = Math.max(2, Math.round((contour.length / total) * maxPoints));
-    const step = Math.max(1, contour.length / count);
-    for (let i = 0; i < count && Math.floor(i * step) < contour.length; i++) {
-      const point = contour[Math.floor(i * step)];
-      output.push({ ...point, breakBefore: output.length > 0 && i === 0 });
-    }
+  for (let i = 0; i < count && Math.floor(i * step) < points.length; i++) {
+    const point = points[Math.floor(i * step)];
+    output.push({ x: point.x, y: point.y });
   }
-  return output.slice(0, maxPoints);
+  return output;
 }
 
 function sampleMaskPoints(mask, width, height, scale, maxPoints) {
@@ -205,8 +217,13 @@ function scaleDetectedObject(object, scale) {
     closed: object.closed,
     sectionCandidate: object.sectionCandidate,
     sectionScore: object.sectionScore || 0,
-    points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale), breakBefore: Boolean(point.breakBefore) })),
-    holes: (object.holes || []).map(hole => ({ closed: hole.closed, points: hole.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale), breakBefore: Boolean(point.breakBefore) })) }))
+    contours: (object.contours || []).map(contour => ({ closed: contour.closed !== false, points: contour.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })) })),
+    points: object.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })),
+    holes: (object.holes || []).map(hole => ({
+      closed: hole.closed,
+      contours: (hole.contours || []).map(contour => ({ closed: contour.closed !== false, points: contour.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) })) })),
+      points: hole.points.map(point => ({ x: Math.round(point.x / scale), y: Math.round(point.y / scale) }))
+    }))
   };
 }
 
@@ -217,7 +234,7 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
   const localFeature = firstItem?.descriptorSamples?.localFeature || null;
 
   return {
-    version: '1.3',
+    version: '2.0',
     source: {
       width: imageBitmap.width,
       height: imageBitmap.height,
@@ -242,19 +259,20 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
     },
     contours: {
       count: objects.length,
-      longJumps: objects.flatMap((object, index) => detectLongJumps(object.points).map(jump => ({ objectIndex: index, ...jump }))).slice(0, 80),
       previews: objects.slice(0, 8).map(object => ({
         closed: object.closed,
         sectionScore: object.sectionScore || 0,
-        contourCount: splitContours(object.points).length,
+        contourCount: object.contours?.length || 0,
         pointCount: object.points.length,
+        contours: sampleContours(object.contours || [], 240),
         points: samplePoints(object.points, 240),
-        holes: (object.holes || []).map(hole => ({ closed: hole.closed, pointCount: hole.points.length, points: samplePoints(hole.points, 120) }))
+        holes: (object.holes || []).map(hole => ({ closed: hole.closed, contourCount: hole.contours?.length || 0, pointCount: hole.points.length, contours: sampleContours(hole.contours || [], 120), points: samplePoints(hole.points, 120) }))
       }))
     },
     resampling: {
       pointCount: firstItem?.normalizedPointCount || 0,
-      points: visual.normalizedPoints || []
+      points: visual.normalizedPoints || [],
+      contours: visual.normalizedContours || []
     },
     normalization: {
       summary: firstItem?.summary || null,
@@ -281,6 +299,7 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
         height: component.height,
         area: component.area,
         closed: component.closed,
+        contours: component.contours?.length || 0,
         points: component.points.length,
         holes: component.holes.length
       }))
@@ -296,7 +315,7 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
         closed: object.closed,
         sectionScore: object.sectionScore || 0,
         points: object.points.length,
-        contourCount: splitContours(object.points).length,
+        contourCount: object.contours?.length || 0,
         holes: object.holes.length
       }))
     },
@@ -328,6 +347,7 @@ function summarizeFingerprint(fingerprint) {
       hu: descriptors.hu?.length || 0,
       fourier: descriptors.fourier?.length || 0,
       points: descriptors.points?.length || 0,
+      contours: descriptors.contours?.length || 0,
       minutiae: summarizeDescriptorObject(descriptors.minutiae),
       localFeature: summarizeDescriptorObject(descriptors.localFeature)
     },
@@ -341,7 +361,8 @@ function summarizeFingerprint(fingerprint) {
       hu: copyNumericArray(descriptors.hu, 16),
       fourier: copyNumericArray(descriptors.fourier, 128),
       values: copyNumericArray(fingerprint.values, 256),
-      normalizedPoints: samplePoints(fingerprint.contour?.normalizedPoints || descriptors.points || [], 256)
+      normalizedPoints: samplePoints(fingerprint.contour?.normalizedPoints || descriptors.points || [], 256),
+      normalizedContours: sampleContours(fingerprint.contour?.contours || descriptors.contours || [], 256)
     }
   };
 }
@@ -353,60 +374,18 @@ function copyNumericArray(value, maxLength) {
 
 function samplePoints(points, maxPoints) {
   if (!Array.isArray(points) || !points.length) return [];
-  const contours = splitContours(points);
-  const total = contours.reduce((sum, contour) => sum + contour.length, 0) || 1;
-  const output = [];
-  for (const contour of contours) {
-    const count = Math.max(1, Math.round((contour.length / total) * maxPoints));
-    const step = Math.max(1, Math.ceil(contour.length / count));
-    for (let i = 0; i < contour.length; i += step) {
-      const point = contour[i];
-      const sampled = Array.isArray(point)
-        ? { x: roundNumber(point[0]), y: roundNumber(point[1]) }
-        : { x: roundNumber(point.x), y: roundNumber(point.y) };
-      sampled.breakBefore = output.length > 0 && i === 0;
-      output.push(sampled);
-      if (output.length >= maxPoints) return output;
-    }
-  }
-  return output;
+  return samplePointList(points, maxPoints).map(point => ({ x: roundNumber(point.x), y: roundNumber(point.y) }));
 }
 
-function splitContours(points) {
-  const contours = [];
-  let current = [];
-  for (const point of points || []) {
-    if (point?.breakBefore && current.length) {
-      contours.push(current);
-      current = [];
-    }
-    current.push(point);
-  }
-  if (current.length) contours.push(current);
-  return contours;
+function sampleContours(contours, maxPoints) {
+  return simplifyContours(contours || [], maxPoints).map(contour => ({
+    closed: contour.closed !== false,
+    points: contour.points.map(point => ({ x: roundNumber(point.x), y: roundNumber(point.y) }))
+  }));
 }
 
-function detectLongJumps(points) {
-  const jumps = [];
-  const contours = splitContours(points);
-  for (const contour of contours) {
-    const distances = [];
-    for (let i = 1; i < contour.length; i++) distances.push(Math.hypot(contour[i].x - contour[i - 1].x, contour[i].y - contour[i - 1].y));
-    const median = percentile(distances, 0.5) || 1;
-    for (let i = 1; i < contour.length; i++) {
-      const distance = Math.hypot(contour[i].x - contour[i - 1].x, contour[i].y - contour[i - 1].y);
-      if (distance > Math.max(12, median * 8)) {
-        jumps.push({ from: contour[i - 1], to: contour[i], distance: Math.round(distance * 10) / 10, median: Math.round(median * 10) / 10 });
-      }
-    }
-  }
-  return jumps;
-}
-
-function percentile(values, ratio) {
-  const sorted = values.filter(value => Number.isFinite(value)).sort((a, b) => a - b);
-  if (!sorted.length) return 0;
-  return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * ratio)))];
+function countMaskPixels(mask) {
+  return mask.reduce((sum, value) => sum + value, 0);
 }
 
 function roundNumber(value) {
@@ -420,40 +399,28 @@ function summarizeDescriptorObject(value) {
 }
 
 function summarizeArray(arrayLike) {
-  if (!arrayLike?.length) return null;
+  const values = Array.from(arrayLike || []);
+  if (!values.length) return null;
   let min = Infinity;
   let max = -Infinity;
   let sum = 0;
-  const step = Math.max(1, Math.ceil(arrayLike.length / 20000));
-  let count = 0;
-  for (let i = 0; i < arrayLike.length; i += step) {
-    const value = arrayLike[i];
+  for (const value of values) {
     min = Math.min(min, value);
     max = Math.max(max, value);
     sum += value;
-    count++;
   }
-  return { min, max, mean: count ? sum / count : 0, sampleCount: count };
-}
-
-function countMaskPixels(mask) {
-  let count = 0;
-  for (let i = 0; i < mask.length; i++) if (mask[i]) count++;
-  return count;
+  return { min, max, mean: sum / values.length };
 }
 
 async function matchObject(object, collection, settings) {
-  const detectedFingerprint = await buildUnifiedFingerprint({ kind: 'detected', object }, settings.pipelineSettings);
-  const topCandidates = findTopMatches(detectedFingerprint, collection, settings.weights, 10);
-  const best = topCandidates[0];
+  const fingerprint = buildUnifiedFingerprint({ kind: 'detected', object }, settings.pipelineSettings);
+  const top = findTopMatches(fingerprint, collection, settings.weights, 10);
+  const winner = top[0] || { reference: '?', designation: 'Inconnu', score: 0, scoreDetails: null };
   return {
-    reference: best?.reference || 'N/A',
-    designation: best?.designation || 'Profil inconnu',
-    score: best?.score || 0,
-    scoreDetails: best?.scoreDetails || null,
-    sectionScore: object.sectionScore || 0,
-    topCandidates,
+    ...winner,
     boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height },
-    detectedFingerprintDebug: summarizeFingerprint(detectedFingerprint)
+    sectionScore: object.sectionScore || 0,
+    topCandidates: top,
+    detectedFingerprintDebug: summarizeFingerprint(fingerprint)
   };
 }
