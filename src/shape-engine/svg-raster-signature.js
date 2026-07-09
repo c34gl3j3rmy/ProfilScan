@@ -13,22 +13,20 @@ export async function buildRasterizedProfileFingerprintCore(profile, pipelineSet
 
   const rasterSize = Math.max(384, settings.fillGridSize * 4);
   const mask = rasterizeContours(contours, bounds, rasterSize);
-  const points = resampleSvgContours(contours, settings.contourPointCount);
-  if (!points.length) return null;
 
   const fingerprint = buildDetectedFingerprintCore({
     width: profile.width,
     height: profile.height,
     area: profile.surface || countMask(mask),
     perimeter: profile.perimeter || 0,
-    points
+    contours
   }, settings);
 
   fingerprint.reference = profile.reference;
   fingerprint.summary.source = 'svg-raster-js-contours';
   fingerprint.summary.rasterSize = rasterSize;
   fingerprint.summary.rasterBlackPixels = countMask(mask);
-  fingerprint.summary.rasterBoundaryPoints = points.length;
+  fingerprint.summary.rasterBoundaryPoints = contours.reduce((sum, contour) => sum + contour.points.length, 0);
   fingerprint.summary.rasterContours = contours.length;
   fingerprint.summary.arcSampler = 'svg-path-sampler';
   fingerprint.summary.sampleMaxSegmentLength = settings.sampleMaxSegmentLength;
@@ -37,18 +35,14 @@ export async function buildRasterizedProfileFingerprintCore(profile, pipelineSet
   fingerprint.summary.closedSvgContours = contours.filter(contour => contour.closed).length;
   fingerprint.summary.svgContourCount = contours.length;
   fingerprint.summary.svgHoleCount = Math.max(0, contours.length - 1);
-  return closeFingerprintContours(fingerprint);
+  return fingerprint;
 }
 
 function normalizeSvgContour(contour) {
-  const points = (contour?.points || []).map(point => ({ x: point.x, y: point.y }));
-  const closed = contour?.closed || (points.length >= 3 && samePoint(points[0], points[points.length - 1]));
-  if (closed && points.length >= 3 && !samePoint(points[0], points[points.length - 1])) {
-    points.push({ ...points[0] });
-  }
+  const points = forceClosedPoints((contour?.points || []).map(point => ({ x: point.x, y: point.y })));
   return {
     points,
-    closed: Boolean(closed),
+    closed: true,
     area: signedArea(points),
     role: 'unknown'
   };
@@ -82,96 +76,10 @@ function rasterizeContours(contours, bounds, rasterSize) {
   return mask;
 }
 
-function resampleSvgContours(contours, targetCount) {
-  const closedContours = contours
-    .filter(contour => contour.points.length > 2)
-    .map(contour => ({ ...contour, points: forceClosedPoints(contour.points) }));
-
-  if (!closedContours.length) return [];
-
-  const totalLength = closedContours.reduce((sum, contour) => sum + contourLength(contour.points), 0) || 1;
-  const output = [];
-
-  for (const contour of closedContours) {
-    const count = Math.max(4, Math.round((contourLength(contour.points) / totalLength) * targetCount));
-    const sampled = resampleClosedPath(contour.points, count);
-    sampled.forEach((point, index) => output.push({
-      x: point.x,
-      y: point.y,
-      breakBefore: output.length > 0 && index === 0,
-      closed: true
-    }));
-  }
-
-  return closeContours(output.slice(0, targetCount));
-}
-
 function forceClosedPoints(points) {
   const output = (points || []).map(point => ({ x: point.x, y: point.y }));
   if (output.length >= 3 && !samePoint(output[0], output[output.length - 1])) {
     output.push({ ...output[0] });
-  }
-  return output;
-}
-
-function closeContours(points) {
-  const output = [];
-  for (const contour of splitContours(points)) {
-    if (!contour.length) continue;
-    output.push(...contour);
-    const first = contour[0];
-    const last = contour[contour.length - 1];
-    if (contour.length >= 3 && !samePoint(first, last)) {
-      output.push({ x: first.x, y: first.y, breakBefore: false, closed: true });
-    }
-  }
-  return output;
-}
-
-function closeFingerprintContours(fingerprint) {
-  const points = closeContours(fingerprint?.descriptors?.points || []);
-  const normalizedPoints = closeContours(fingerprint?.contour?.normalizedPoints || []);
-  if (fingerprint?.descriptors) fingerprint.descriptors.points = points;
-  if (fingerprint?.contour) {
-    fingerprint.contour.normalizedPoints = normalizedPoints;
-    fingerprint.contour.contourCount = splitContours(normalizedPoints).length;
-  }
-  if (fingerprint?.summary) {
-    fingerprint.summary.contourCount = splitContours(normalizedPoints).length;
-    fingerprint.summary.contoursForcedClosed = true;
-  }
-  return fingerprint;
-}
-
-function contourLength(points) {
-  let total = 0;
-  for (let index = 1; index < points.length; index++) {
-    total += distance(points[index], points[index - 1]);
-  }
-  return total;
-}
-
-function resampleClosedPath(points, targetCount) {
-  if (points.length <= 2) return points;
-  const source = forceClosedPoints(points);
-  const distances = [0];
-  let total = 0;
-  for (let index = 1; index < source.length; index++) {
-    total += distance(source[index], source[index - 1]);
-    distances.push(total);
-  }
-  if (!total) return source.slice(0, targetCount);
-
-  const output = [];
-  for (let index = 0; index < targetCount; index++) {
-    const target = (index / targetCount) * total;
-    let segment = 1;
-    while (segment < distances.length - 1 && distances[segment] < target) segment++;
-    const previous = source[segment - 1];
-    const current = source[segment];
-    const segmentLength = distances[segment] - distances[segment - 1] || 1;
-    const t = (target - distances[segment - 1]) / segmentLength;
-    output.push({ x: previous.x + (current.x - previous.x) * t, y: previous.y + (current.y - previous.y) * t });
   }
   return output;
 }
@@ -182,20 +90,6 @@ function distance(a, b) {
 
 function samePoint(a, b) {
   return distance(a, b) < 1e-9;
-}
-
-function splitContours(points) {
-  const contours = [];
-  let current = [];
-  for (const point of points || []) {
-    if (point.breakBefore && current.length) {
-      contours.push(current);
-      current = [];
-    }
-    current.push(point);
-  }
-  if (current.length) contours.push(current);
-  return contours;
 }
 
 function isPointInsideContours(x, y, contours) {
