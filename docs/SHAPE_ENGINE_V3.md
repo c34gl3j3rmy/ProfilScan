@@ -113,7 +113,43 @@ Extraire automatiquement :
 
 Ces informations servent de filtres, de gates et de sous-scores explicables.
 
-## Phase 6 — Apprentissage optionnel
+## Phase 6 — Pipeline expérimental modulaire
+
+Chaque descripteur devient un module indépendant enregistré dans un registre central.
+
+### Contrat d'un module
+
+Un module expose :
+
+- un identifiant et une version ;
+- ses paramètres ;
+- son état : `experimental`, `validated`, `disabled` ou `non-evaluable` ;
+- son temps d'exécution ;
+- son coût mémoire ;
+- la taille de sa signature ;
+- son score par candidat ;
+- son pouvoir discriminant ;
+- ses warnings et valeurs manquantes.
+
+### Mesures automatiques
+
+- Top 1, Top 3 et Top 10 avec le module seul ;
+- décisions corrigées et décisions dégradées ;
+- marge moyenne entre le bon candidat et le premier mauvais candidat ;
+- variance et taux de scores constants ;
+- corrélation avec les autres modules pour repérer les redondances ;
+- temps moyen, médian et P95 ;
+- pouvoir discriminant global et par famille de profils.
+
+### Règles
+
+- Un module non discriminant ne peut pas influencer le classement.
+- Un module expérimental n'est jamais activé par défaut.
+- Un module peut être désactivé sans modifier le cœur du pipeline.
+- L'ajout d'un module ne doit pas nécessiter de modifier le benchmark.
+- Chaque changement doit pouvoir être comparé en A/B avec la version précédente.
+
+## Phase 7 — Apprentissage optionnel
 
 À envisager uniquement après stabilisation du moteur déterministe :
 
@@ -141,11 +177,13 @@ Rééchantillonnage adaptatif
        ↓
 Points caractéristiques + courbure
        ↓
-Descripteurs globaux, locaux et topologiques
+Modules de descripteurs indépendants
+       ↓
+Mesure du pouvoir discriminant
        ↓
 Gates de cohérence
        ↓
-Fusion des scores
+Fusion des scores validés
        ↓
 Classement + explication
 ```
@@ -157,8 +195,9 @@ Classement + explication
 3. Turning Function, CSS, Chamfer et descripteurs pondérés.
 4. Hiérarchie de contours, squelette et graphe topologique.
 5. Signature métier.
-6. Optimisation des poids.
-7. IA optionnelle.
+6. Pipeline expérimental modulaire.
+7. Optimisation des poids.
+8. IA optionnelle.
 
 ## Principes de sécurité technique
 
