@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.5.6';
+const CACHE_NAME = 'profilscan-v1.5.7';
 const ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,7 @@ const ASSETS = [
   './src/app/config-manager.js',
   './src/app/image-import.js',
   './src/app/live-slider-preview.js',
+  './src/app/observability-dashboard.js',
   './src/app/pipeline-preview.js',
   './src/app/preprocessing-live-settings.js',
   './src/app/render-results.js',
@@ -33,6 +34,9 @@ const ASSETS = [
   './src/observability/algorithm-registry.js',
   './src/observability/algorithm-telemetry.js',
   './src/observability/algorithm-orchestrator.js',
+  './src/observability/consistency-report.js',
+  './src/observability/core-algorithm-runtime.js',
+  './src/observability/descriptor-consistency.js',
   './src/observability/fingerprint-observer.js',
   './src/storage/indexed-db.js',
   './src/shape-engine/fingerprint-pipeline.js',
