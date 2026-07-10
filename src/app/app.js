@@ -1,3 +1,4 @@
+import '../observability/worker-telemetry-bridge.js';
 import './app-main.js';
 import './single-report-download.js';
 import './live-slider-preview.js';
