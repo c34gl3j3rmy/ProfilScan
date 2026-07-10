@@ -33,13 +33,20 @@ const BASE_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill', 'minutiae', 'l
 const ADVANCED_KEYS = ['hausdorff', 'shapeContext', 'icp', 'ransac', 'zernike'];
 const SINGLE_BASE_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill', 'minutiae', 'localFeature'];
 const SINGLE_ADVANCED_KEYS = ['advanced', ...ADVANCED_KEYS];
+const DISCRIMINATION_EPSILON = 1e-6;
 
 export function buildWeightPresetBenchmark(results) {
   const singleAlgorithms = buildSingleAlgorithmBenchmark(results);
   const fixed = WEIGHT_PRESETS.map(preset => summarizePreset(results, preset, 'fixed'));
   const optimized = buildOptimizedWeightBenchmark(results, 900);
   return [...singleAlgorithms, ...fixed, ...optimized]
-    .sort((a, b) => b.top1Accuracy - a.top1Accuracy || b.top3Accuracy - a.top3Accuracy || b.top10Accuracy - a.top10Accuracy);
+    .sort(comparePresetResults);
+}
+
+function comparePresetResults(a, b) {
+  const aScore = Number.isFinite(a.top1Accuracy) ? a.top1Accuracy : -1;
+  const bScore = Number.isFinite(b.top1Accuracy) ? b.top1Accuracy : -1;
+  return bScore - aScore || (b.top3Accuracy ?? -1) - (a.top3Accuracy ?? -1) || (b.top10Accuracy ?? -1) - (a.top10Accuracy ?? -1);
 }
 
 function buildSingleAlgorithmBenchmark(results) {
@@ -71,7 +78,7 @@ function buildOptimizedWeightBenchmark(results, maxCombinations) {
 
   const unique = [];
   const seen = new Set();
-  for (const candidate of candidates.sort((a, b) => b.top1Accuracy - a.top1Accuracy || b.top3Accuracy - a.top3Accuracy || b.top10Accuracy - a.top10Accuracy)) {
+  for (const candidate of candidates.sort(comparePresetResults)) {
     const signature = JSON.stringify({ base: candidate.baseWeights, advanced: candidate.advancedWeight, details: candidate.advancedDetails });
     if (seen.has(signature)) continue;
     seen.add(signature);
@@ -163,10 +170,12 @@ function summarizePreset(results, preset, category = 'fixed') {
   const rows = results
     .filter(result => result.expectedKnownInBase && Array.isArray(result.topCandidates) && result.topCandidates.length)
     .map(result => rescoreResult(result, preset));
-  const total = rows.length;
-  const top1 = rows.filter(row => row.top1).length;
-  const top3 = rows.filter(row => row.top3).length;
-  const top10 = rows.filter(row => row.top10).length;
+  const evaluatedRows = rows.filter(row => row.discriminating);
+  const total = evaluatedRows.length;
+  const top1 = evaluatedRows.filter(row => row.top1).length;
+  const top3 = evaluatedRows.filter(row => row.top3).length;
+  const top10 = evaluatedRows.filter(row => row.top10).length;
+  const nonDiscriminating = rows.length - evaluatedRows.length;
 
   return {
     name: preset.name,
@@ -176,13 +185,16 @@ function summarizePreset(results, preset, category = 'fixed') {
     advancedWeight: preset.advancedWeight,
     advancedDetails: preset.advancedDetails,
     total,
+    inputRows: rows.length,
+    nonDiscriminating,
+    discriminating: total > 0,
     top1,
     top3,
     top10,
-    top1Accuracy: percent(top1, total),
-    top3Accuracy: percent(top3, total),
-    top10Accuracy: percent(top10, total),
-    changedDecisions: rows.filter(row => row.changedDecision).length,
+    top1Accuracy: total ? percent(top1, total) : null,
+    top3Accuracy: total ? percent(top3, total) : null,
+    top10Accuracy: total ? percent(top10, total) : null,
+    changedDecisions: evaluatedRows.filter(row => row.changedDecision).length,
     rows: rows.map(row => ({
       fileName: row.fileName,
       expectedReference: row.expectedReference,
@@ -192,15 +204,38 @@ function summarizePreset(results, preset, category = 'fixed') {
       expectedRank: row.expectedRank,
       top1: row.top1,
       top3: row.top3,
-      changedDecision: row.changedDecision
+      changedDecision: row.changedDecision,
+      discriminating: row.discriminating,
+      scoreSpread: row.scoreSpread
     }))
   };
 }
 
 function rescoreResult(result, preset) {
   const rescored = result.topCandidates
-    .map(candidate => ({ ...candidate, presetScore: scoreCandidate(candidate, preset) }))
-    .sort((a, b) => b.presetScore - a.presetScore);
+    .map(candidate => ({ ...candidate, presetScore: scoreCandidate(candidate, preset) }));
+  const scores = rescored.map(candidate => candidate.presetScore).filter(Number.isFinite);
+  const scoreSpread = scores.length ? Math.max(...scores) - Math.min(...scores) : 0;
+  const discriminating = scoreSpread > DISCRIMINATION_EPSILON;
+
+  if (!discriminating) {
+    return {
+      fileName: result.fileName,
+      expectedReference: result.expectedReference,
+      previousBestReference: result.bestReference || null,
+      newBestReference: null,
+      newBestScore: scores[0] ?? null,
+      expectedRank: null,
+      top1: false,
+      top3: false,
+      top10: false,
+      changedDecision: false,
+      discriminating: false,
+      scoreSpread: round(scoreSpread)
+    };
+  }
+
+  rescored.sort((a, b) => b.presetScore - a.presetScore);
   const expected = String(result.expectedReference || '').toLowerCase();
   const rank = rescored.findIndex(candidate => String(candidate.reference || '').toLowerCase() === expected) + 1;
   const newBest = rescored[0] || null;
@@ -215,7 +250,9 @@ function rescoreResult(result, preset) {
     top1: Boolean(newBest && String(newBest.reference || '').toLowerCase() === expected),
     top3: Boolean(rank && rank <= 3),
     top10: Boolean(rank && rank <= 10),
-    changedDecision: Boolean(newBest && result.bestReference && newBest.reference !== result.bestReference)
+    changedDecision: Boolean(newBest && result.bestReference && newBest.reference !== result.bestReference),
+    discriminating: true,
+    scoreSpread: round(scoreSpread)
   };
 }
 
