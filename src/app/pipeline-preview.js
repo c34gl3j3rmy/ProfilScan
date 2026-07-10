@@ -14,7 +14,7 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
 
   if (!contours.length) {
     drawGrid(ctx, size, 8);
-    drawMessage(ctx, size, 'Aucun contour signature');
+    drawMessage(ctx, size, 'Empreinte invalide : contours absents');
     return;
   }
 
@@ -33,20 +33,12 @@ export function renderPipelinePreview(canvas, profile, fingerprint) {
 }
 
 function getPreviewContours(fingerprint) {
-  const structured = fingerprint?.contour?.contours || fingerprint?.descriptors?.contours || [];
-  const contours = structured
+  return (fingerprint?.contour?.contours || [])
     .map(contour => ({
       closed: contour?.closed !== false,
       points: Array.isArray(contour?.points) ? contour.points : []
     }))
     .filter(contour => contour.points.length >= 3);
-
-  if (contours.length) return contours;
-
-  const fallbackPoints = fingerprint?.contour?.normalizedPoints || fingerprint?.descriptors?.points || [];
-  return fallbackPoints.length >= 3
-    ? [{ closed: true, points: fallbackPoints }]
-    : [];
 }
 
 function drawMaterialGrid(ctx, size, contours, gridSize) {
