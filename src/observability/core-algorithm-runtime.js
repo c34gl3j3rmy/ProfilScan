@@ -1,3 +1,4 @@
+import '../shape-engine/elliptic-fourier.js';
 import { attachAlgorithmRuntime } from './algorithm-registry.js';
 import { buildLocalFeatureSignature } from '../shape-engine/local-feature-signature.js';
 import { buildMinutiaeSignature } from '../shape-engine/minutiae-signature.js';
