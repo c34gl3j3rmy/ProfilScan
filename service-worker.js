@@ -1,4 +1,4 @@
-const CACHE_NAME = 'profilscan-v1.5.5';
+const CACHE_NAME = 'profilscan-v1.5.6';
 const ASSETS = [
   './',
   './index.html',
@@ -33,6 +33,7 @@ const ASSETS = [
   './src/observability/algorithm-registry.js',
   './src/observability/algorithm-telemetry.js',
   './src/observability/algorithm-orchestrator.js',
+  './src/observability/fingerprint-observer.js',
   './src/storage/indexed-db.js',
   './src/shape-engine/fingerprint-pipeline.js',
   './src/shape-engine/pipeline-settings.js',
