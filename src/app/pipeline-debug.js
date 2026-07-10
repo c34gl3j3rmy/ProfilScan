@@ -15,7 +15,7 @@ button?.addEventListener('click', () => {
   panelOpen = !panelOpen;
   panel?.classList.toggle('hidden', !panelOpen);
   button.textContent = panelOpen ? 'Masquer debug' : 'Debug pipeline';
-  if (panelOpen) renderDebugPipeline(lastResult || window.__ProfilScanLastResult || window.__profilScanLastResult || null);
+  if (panelOpen) renderDebugPipeline(lastResult || window.__profilScanLastResult || null);
 });
 
 export function renderDebugPipeline(result) {
@@ -29,10 +29,7 @@ export function renderDebugPipeline(result) {
 
   summary.innerHTML = renderSummary(debug, result);
   stages.innerHTML = '';
-
-  for (const stage of buildStages(debug)) {
-    stages.appendChild(renderStage(stage, debug));
-  }
+  for (const stage of buildStages(debug)) stages.appendChild(renderStage(stage, debug));
 }
 
 function renderSummary(debug, result) {
@@ -40,13 +37,12 @@ function renderSummary(debug, result) {
   const contours = debug.contours || {};
   const components = debug.components || {};
   const candidates = debug.candidates || {};
-  const longJumps = Array.isArray(contours.longJumps) ? contours.longJumps.length : 0;
   const holes = (contours.previews || []).reduce((sum, contour) => sum + (contour.holes?.length || 0), 0);
 
   return [
-    summaryCard('Image', `${source.width || result?.width || '-'} x ${source.height || result?.height || '-'}`, `scale ${formatNumber(source.scale)}`),
-    summaryCard('Contours', contours.count ?? '-', `${longJumps} saut(s) long(s)`),
-    summaryCard('Composants', components.count ?? '-', `${holes} trou(s) visible(s)`),
+    summaryCard('Image', `${source.width || result?.width || '-'} x ${source.height || result?.height || '-'}`, source.inputMode || `scale ${formatNumber(source.scale)}`),
+    summaryCard('Contours', contours.count ?? '-', `${holes} trou(s)`),
+    summaryCard('Composants', components.count ?? '-', 'avant filtrage'),
     summaryCard('Candidats', candidates.count ?? result?.items?.length ?? '-', 'apres filtrage')
   ].join('');
 }
@@ -59,10 +55,13 @@ function buildStages(debug) {
   return [
     {
       title: '1. Segmentation',
-      description: 'Points rouges avant liaison des contours.',
+      description: debug.segmentation?.filledMask
+        ? 'Frontiere du masque de matiere noire.'
+        : 'Points rouges avant liaison des contours.',
       points: debug.segmentation?.edgePreview || [],
       metrics: {
         mode: debug.segmentation?.mode,
+        filledMask: Boolean(debug.segmentation?.filledMask),
         sampledEdgePoints: debug.segmentation?.sampledEdgePoints,
         threshold: debug.segmentation?.stats?.threshold,
         activePixels: debug.segmentation?.stats?.activePixels
@@ -70,20 +69,17 @@ function buildStages(debug) {
     },
     {
       title: '2. Contours ordonnes',
-      description: 'Contours issus du traceur. Orange = contour ouvert. Rouge = contour ferme. Violet = saut long detecte.',
+      description: 'Chaque contour et chaque trou sont dessines independamment.',
       contours: debug.contours?.previews || [],
-      longJumps: debug.contours?.longJumps || [],
-      metrics: {
-        count: debug.contours?.count,
-        longJumps: debug.contours?.longJumps?.length || 0
-      }
+      metrics: { count: debug.contours?.count }
     },
     {
-      title: '3. Reechantillonnage / points normalises',
-      description: 'Points utilises par la signature detectee apres normalisation.',
-      normalizedPoints: debug.resampling?.points || [],
+      title: '3. Reechantillonnage / contours normalises',
+      description: 'Contours utilises par la signature detectee apres normalisation.',
+      normalizedContours: debug.resampling?.contours || [],
       metrics: {
         pointCount: debug.resampling?.pointCount,
+        contourCount: debug.resampling?.contours?.length || 0,
         descriptorSizes: debug.normalization?.descriptorSizes ? 'present' : 'absent'
       }
     },
@@ -111,7 +107,6 @@ function buildStages(debug) {
 function renderStage(stage, debug) {
   const root = document.createElement('section');
   root.className = 'debug-stage-card';
-
   root.innerHTML = `
     <header>
       <div>
@@ -125,61 +120,88 @@ function renderStage(stage, debug) {
     </header>
   `;
 
-  if (stage.points) root.appendChild(renderPointCanvas(stage.points, debug, 'points'));
-  if (stage.contours) root.appendChild(renderContourCanvas(stage.contours, stage.longJumps || [], debug));
-  if (stage.normalizedPoints) root.appendChild(renderPointCanvas(stage.normalizedPoints, debug, 'normalized'));
+  if (stage.points) root.appendChild(renderPointCanvas(stage.points, debug));
+  if (stage.contours) root.appendChild(renderContourCanvas(stage.contours, debug));
+  if (stage.normalizedContours) root.appendChild(renderNormalizedContourCanvas(stage.normalizedContours));
   if (stage.values) root.appendChild(renderValues(stage.values));
   if (stage.matching) root.appendChild(renderMatching(stage.matching));
-
   return root;
 }
 
-function renderPointCanvas(points, debug, mode) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'debug-stage-canvas';
-  const size = mode === 'normalized' ? 360 : 520;
-  canvas.width = size;
-  canvas.height = size;
+function renderPointCanvas(points, debug) {
+  const canvas = createCanvas(520, 520);
   const ctx = canvas.getContext('2d');
   drawCanvasBackground(ctx);
+  const bounds = getImageBounds(debug);
+  const transform = makeImageTransform(bounds, canvas.width, canvas.height);
+  ctx.save();
+  ctx.fillStyle = '#dc2626';
+  for (const point of points || []) {
+    const p = transform(point.x, point.y);
+    ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
+  }
+  ctx.restore();
+  return canvas;
+}
 
-  if (mode === 'normalized') drawNormalizedPoints(ctx, points);
-  else drawImagePoints(ctx, points, debug);
+function renderContourCanvas(contours, debug) {
+  const canvas = createCanvas(520, 520);
+  const ctx = canvas.getContext('2d');
+  drawCanvasBackground(ctx);
+  const bounds = getImageBounds(debug);
+  const transform = makeImageTransform(bounds, canvas.width, canvas.height);
+
+  contours.forEach((entry, index) => {
+    const structured = entry.contours?.length
+      ? entry.contours
+      : [{ points: entry.points || [], closed: entry.closed !== false }];
+
+    for (const contour of structured) {
+      drawPolyline(ctx, contour.points || [], transform, contour.closed === false ? '#f97316' : '#dc2626', contour.closed !== false);
+    }
+    for (const hole of entry.holes || []) {
+      const holeContours = hole.contours?.length
+        ? hole.contours
+        : [{ points: hole.points || [], closed: hole.closed !== false }];
+      for (const contour of holeContours) drawPolyline(ctx, contour.points || [], transform, '#06b6d4', contour.closed !== false);
+    }
+    drawLabel(ctx, transform(bounds.x + 6, bounds.y + 18 + index * 18), `#${index + 1} ${entry.closed ? 'ferme' : 'ouvert'}`);
+  });
 
   return canvas;
 }
 
-function renderContourCanvas(contours, longJumps, debug) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'debug-stage-canvas';
-  canvas.width = 520;
-  canvas.height = 520;
+function renderNormalizedContourCanvas(contours) {
+  const canvas = createCanvas(360, 360);
   const ctx = canvas.getContext('2d');
   drawCanvasBackground(ctx);
-
-  const bounds = getImageBounds(debug);
-  const transform = makeImageTransform(bounds, canvas.width, canvas.height);
-
-  contours.forEach((contour, index) => {
-    drawPolyline(ctx, contour.points || [], transform, contour.closed ? '#dc2626' : '#f97316', Boolean(contour.closed));
-    for (const hole of contour.holes || []) drawPolyline(ctx, hole.points || [], transform, '#06b6d4', Boolean(hole.closed));
-    drawLabel(ctx, transform(bounds.x + 6, bounds.y + 18 + index * 18), `#${index + 1} ${contour.closed ? 'ferme' : 'ouvert'}`);
+  const transform = (x, y) => ({
+    x: canvas.width / 2 + Number(x || 0) * canvas.width * 0.82,
+    y: canvas.height / 2 + Number(y || 0) * canvas.height * 0.82
   });
 
-  for (const jump of longJumps || []) drawJump(ctx, jump, transform);
+  for (const contour of contours || []) {
+    const points = contour?.points || [];
+    if (points.length < 2) continue;
+    drawPolyline(ctx, points, transform, '#111827', contour.closed !== false, 2);
+
+    ctx.save();
+    ctx.fillStyle = '#2563eb';
+    for (const point of points) {
+      const p = transform(point.x, point.y);
+      ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+    }
+    ctx.restore();
+  }
 
   return canvas;
 }
 
 function renderValues(values) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'debug-stage-canvas debug-bar-canvas';
-  canvas.width = 520;
-  canvas.height = 220;
+  const canvas = createCanvas(520, 220, 'debug-bar-canvas');
   const ctx = canvas.getContext('2d');
   drawCanvasBackground(ctx);
-
-  const numeric = values.map(Number).filter(Number.isFinite);
+  const numeric = (values || []).map(Number).filter(Number.isFinite);
   const max = Math.max(...numeric.map(Math.abs), 1);
   const gap = 2;
   const width = Math.max(2, (canvas.width - 32) / Math.max(1, numeric.length) - gap);
@@ -195,8 +217,7 @@ function renderValues(values) {
   numeric.forEach((value, index) => {
     const height = Math.max(1, Math.abs(value / max) * (canvas.height - 56));
     const x = 16 + index * (width + gap);
-    const y = zeroY - height;
-    ctx.fillRect(x, y, width, height);
+    ctx.fillRect(x, zeroY - height, width, height);
   });
   ctx.restore();
   return canvas;
@@ -213,6 +234,14 @@ function renderMatching(matching) {
   return box;
 }
 
+function createCanvas(width, height, extraClass = '') {
+  const canvas = document.createElement('canvas');
+  canvas.className = `debug-stage-canvas${extraClass ? ` ${extraClass}` : ''}`;
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
 function drawCanvasBackground(ctx) {
   ctx.save();
   ctx.fillStyle = '#ffffff';
@@ -222,81 +251,22 @@ function drawCanvasBackground(ctx) {
   ctx.restore();
 }
 
-function drawImagePoints(ctx, points, debug) {
-  const bounds = getImageBounds(debug);
-  const transform = makeImageTransform(bounds, ctx.canvas.width, ctx.canvas.height);
-  ctx.save();
-  ctx.fillStyle = '#dc2626';
-  for (const point of points || []) {
-    const p = transform(point.x, point.y);
-    ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
-  }
-  ctx.restore();
-}
-
-function drawNormalizedPoints(ctx, points) {
-  const transform = (x, y) => ({
-    x: ctx.canvas.width / 2 + x * ctx.canvas.width * 0.82,
-    y: ctx.canvas.height / 2 + y * ctx.canvas.height * 0.82
-  });
-  ctx.save();
-  ctx.strokeStyle = '#111827';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  let started = false;
-  for (const point of points || []) {
-    const p = transform(Number(point.x) || 0, Number(point.y) || 0);
-    if (!started || point.breakBefore) {
-      ctx.moveTo(p.x, p.y);
-      started = true;
-    } else ctx.lineTo(p.x, p.y);
-  }
-  ctx.stroke();
-  ctx.fillStyle = '#2563eb';
-  for (const point of points || []) {
-    const p = transform(Number(point.x) || 0, Number(point.y) || 0);
-    ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
-  }
-  ctx.restore();
-}
-
-function drawPolyline(ctx, points, transform, color, closed) {
+function drawPolyline(ctx, points, transform, color, closed, lineWidth = 3) {
   if (!points?.length) return;
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = lineWidth;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   ctx.beginPath();
-  let started = false;
-  for (const point of points) {
-    const p = transform(point.x, point.y);
-    if (!started || point.breakBefore) {
-      ctx.moveTo(p.x, p.y);
-      started = true;
-    } else ctx.lineTo(p.x, p.y);
+  const first = transform(points[0].x, points[0].y);
+  ctx.moveTo(first.x, first.y);
+  for (let index = 1; index < points.length; index++) {
+    const p = transform(points[index].x, points[index].y);
+    ctx.lineTo(p.x, p.y);
   }
   if (closed) ctx.closePath();
   ctx.stroke();
-  ctx.restore();
-}
-
-function drawJump(ctx, jump, transform) {
-  const from = jump.from || {};
-  const to = jump.to || {};
-  const a = transform(from.x, from.y);
-  const b = transform(to.x, to.y);
-  ctx.save();
-  ctx.strokeStyle = '#7c3aed';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([6, 5]);
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-  ctx.fillStyle = '#7c3aed';
-  ctx.fillRect(a.x - 3, a.y - 3, 6, 6);
-  ctx.fillRect(b.x - 3, b.y - 3, 6, 6);
   ctx.restore();
 }
 
@@ -310,9 +280,12 @@ function drawLabel(ctx, point, text) {
 
 function getImageBounds(debug) {
   const source = debug?.source || {};
-  const width = source.width || source.scaledWidth || 1;
-  const height = source.height || source.scaledHeight || 1;
-  return { x: 0, y: 0, width, height };
+  return {
+    x: 0,
+    y: 0,
+    width: source.width || source.scaledWidth || 1,
+    height: source.height || source.scaledHeight || 1
+  };
 }
 
 function makeImageTransform(bounds, canvasWidth, canvasHeight) {
@@ -325,8 +298,7 @@ function makeImageTransform(bounds, canvasWidth, canvasHeight) {
 
 function formatNumber(value) {
   const number = Number(value);
-  if (!Number.isFinite(number)) return '-';
-  return Math.round(number * 100) / 100;
+  return Number.isFinite(number) ? Math.round(number * 100) / 100 : '-';
 }
 
 function escapeHtml(value) {
