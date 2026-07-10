@@ -3,7 +3,7 @@ import { buildUnifiedFingerprint } from '../shape-engine/fingerprint-pipeline.js
 import { normalizePipelineSettings } from '../shape-engine/pipeline-settings.js';
 import { traceBoundary } from './contour-tracer.js';
 import { getScaledImageData, buildGray, suppressTexture, blurGray } from './image-preprocessing.js';
-import { buildRobustEdgeMask } from './robust-segmentation.js';
+import { buildFilledMaterialMask, buildRobustEdgeMask } from './robust-segmentation.js';
 import { selectSectionCandidates } from './section-candidates.js';
 
 const DEFAULT_SETTINGS = {
@@ -25,12 +25,21 @@ self.onmessage = async event => {
     const gray = buildGray(source.imageData, activeSettings.image);
     const denoised = suppressTexture(gray, source.width, source.height, activeSettings.image.textureSuppression);
     const blurred = blurGray(denoised, source.width, source.height, activeSettings.image.blurRadius);
-    postProgress(40, 'Segmentation robuste', `Seuil dynamique : ${Math.round(activeSettings.detection.edgeQuantile * 100)} %`);
-    const segmentation = buildRobustEdgeMask(blurred, source.width, source.height, activeSettings.detection);
-    const edges = segmentation.mask;
-    const edgePoints = sampleMaskPoints(edges, source.width, source.height, source.scale, 4500);
-    postProgress(55, 'Connexion des contours', `${edgePoints.length} points contours visibles · mode ${segmentation.mode}`);
-    const linkedEdges = dilate(edges, source.width, source.height, activeSettings.detection.linkRadius);
+    const useFilledMaterial = activeSettings.inputMode === 'filled-material';
+    postProgress(
+      40,
+      useFilledMaterial ? 'Segmentation de la matiere' : 'Segmentation robuste',
+      useFilledMaterial ? 'Masque noir rempli par seuil Otsu' : `Seuil dynamique : ${Math.round(activeSettings.detection.edgeQuantile * 100)} %`
+    );
+    const segmentation = useFilledMaterial
+      ? buildFilledMaterialMask(blurred, source.width, source.height)
+      : buildRobustEdgeMask(blurred, source.width, source.height, activeSettings.detection);
+    const previewMask = segmentation.previewMask || segmentation.mask;
+    const edgePoints = sampleMaskPoints(previewMask, source.width, source.height, source.scale, 4500);
+    postProgress(55, useFilledMaterial ? 'Masque de matiere' : 'Connexion des contours', `${edgePoints.length} points contours visibles · mode ${segmentation.mode}`);
+    const linkedEdges = segmentation.filledMask
+      ? segmentation.mask
+      : dilate(segmentation.mask, source.width, source.height, activeSettings.detection.linkRadius);
     postProgress(68, 'Recherche des sections', 'Selection des faces candidates');
     const components = findComponents(linkedEdges, source.width, source.height);
     postProgress(78, 'Score des sections', `${components.length} zones trouvees`);
@@ -70,6 +79,7 @@ self.onmessage = async event => {
 function mergeSettings(settings = {}, collection = null) {
   return {
     expectedReference: String(settings.expectedReference || '').trim(),
+    inputMode: settings.inputMode === 'filled-material' ? 'filled-material' : 'edge-photo',
     image: {
       brightness: clampNumber(settings.image?.brightness, DEFAULT_SETTINGS.image.brightness, -100, 100),
       contrast: clampNumber(settings.image?.contrast, DEFAULT_SETTINGS.image.contrast, 0, 220),
@@ -234,13 +244,14 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
   const localFeature = firstItem?.descriptorSamples?.localFeature || null;
 
   return {
-    version: '2.0',
+    version: '2.1',
     source: {
       width: imageBitmap.width,
       height: imageBitmap.height,
       scaledWidth: source.width,
       scaledHeight: source.height,
-      scale: source.scale
+      scale: source.scale,
+      inputMode: activeSettings.inputMode
     },
     preprocessing: {
       settings: activeSettings.image,
@@ -253,6 +264,7 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
     segmentation: {
       settings: activeSettings.detection,
       mode: segmentation.mode,
+      filledMask: Boolean(segmentation.filledMask),
       stats: segmentation.stats,
       sampledEdgePoints: edgePoints.length,
       edgePreview: samplePoints(edgePoints, 600)
@@ -283,7 +295,8 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
     minutiae,
     localFeature,
     linking: {
-      linkRadius: activeSettings.detection.linkRadius,
+      applied: !segmentation.filledMask,
+      linkRadius: segmentation.filledMask ? 0 : activeSettings.detection.linkRadius,
       linkedEdgePixels: countMaskPixels(linkedEdges)
     },
     components: {
