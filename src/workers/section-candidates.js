@@ -43,30 +43,40 @@ function mergeNearbySections(components, imageWidth, imageHeight, detectionSetti
   const groups = [];
 
   for (const component of components) {
-    const group = groups.find(existing => areNear(existing, component, gap) && isSimilarScale(existing, component));
+    const prepared = withCompleteContours(component);
+    const group = groups.find(existing => areNear(existing, prepared, gap) && isSimilarScale(existing, prepared));
     if (!group) {
-      groups.push({ ...component, points: [...component.points], holes: [...(component.holes || [])] });
+      groups.push({
+        ...prepared,
+        points: [...(prepared.points || [])],
+        contours: cloneContours(prepared.contours),
+        holes: [...(prepared.holes || [])]
+      });
       continue;
     }
 
-    const maxX = Math.max(group.x + group.width, component.x + component.width);
-    const maxY = Math.max(group.y + group.height, component.y + component.height);
-    group.x = Math.min(group.x, component.x);
-    group.y = Math.min(group.y, component.y);
+    const maxX = Math.max(group.x + group.width, prepared.x + prepared.width);
+    const maxY = Math.max(group.y + group.height, prepared.y + prepared.height);
+    group.x = Math.min(group.x, prepared.x);
+    group.y = Math.min(group.y, prepared.y);
     group.width = maxX - group.x;
     group.height = maxY - group.y;
-    group.area += component.area;
-    group.closed = group.closed || component.closed;
-    group.points = simplifyPoints([...group.points, ...component.points], 260);
-    group.holes = [...(group.holes || []), ...(component.holes || [])].slice(0, 20);
-    group.sectionScore = Math.max(group.sectionScore, component.sectionScore) * 0.92;
+    group.area += prepared.area;
+    group.closed = group.closed && prepared.closed;
+    group.points = simplifyPoints([...(group.points || []), ...(prepared.points || [])], 260);
+    group.contours = deduplicateContours([...cloneContours(group.contours), ...cloneContours(prepared.contours)]);
+    group.holes = [...(group.holes || []), ...(prepared.holes || [])].slice(0, 20);
+    group.sectionScore = Math.max(group.sectionScore, prepared.sectionScore) * 0.92;
   }
 
-  return groups.map(group => ({
-    ...group,
-    points: simplifyPoints(group.closed ? group.points : sortAroundCenter(group.points), 240),
-    sectionScore: scoreSectionCandidate(group, imageWidth, imageHeight)
-  })).filter(group => group.sectionScore >= 0.28);
+  return groups.map(group => {
+    const prepared = withCompleteContours(group);
+    return {
+      ...prepared,
+      points: simplifyPoints(prepared.points || [], 240),
+      sectionScore: scoreSectionCandidate(prepared, imageWidth, imageHeight)
+    };
+  }).filter(group => group.sectionScore >= 0.28);
 }
 
 function legacyFallback(components, imageWidth, imageHeight, detectionSettings) {
@@ -75,7 +85,8 @@ function legacyFallback(components, imageWidth, imageHeight, detectionSettings) 
   const minSide = Math.max(12, Math.min(imageWidth, imageHeight) * 0.015);
   return components
     .filter(component => component.area >= minArea && component.width >= minSide && component.height >= minSide && component.width * component.height <= imageArea * 0.95)
-    .map(component => ({ ...component, points: simplifyPoints(component.closed ? component.points : sortAroundCenter(component.points), 240) }))
+    .map(component => withCompleteContours(component))
+    .map(component => ({ ...component, points: simplifyPoints(component.points || [], 240) }))
     .sort((a, b) => b.width * b.height - a.width * a.height)
     .slice(0, 10)
     .sort((a, b) => a.y - b.y || a.x - b.x);
@@ -91,21 +102,59 @@ function suppressOverlaps(components) {
 }
 
 function markAsSectionCandidate(component) {
+  const prepared = withCompleteContours(component);
   return {
-    ...component,
-    closed: component.closed || isAlmostClosed(component.points),
-    points: simplifyPoints(component.closed ? component.points : sortAroundCenter(component.points), 240),
+    ...prepared,
+    closed: prepared.contours.length > 0 && prepared.contours.every(contour => contour.closed !== false),
+    points: simplifyPoints(prepared.points || [], 240),
     sectionCandidate: true
   };
 }
 
-function isAlmostClosed(points) {
-  if (points.length < 8) return false;
-  const first = points[0];
-  const last = points[points.length - 1];
-  const box = getBounds(points);
-  const closeDistance = Math.hypot(first.x - last.x, first.y - last.y);
-  return closeDistance <= Math.max(8, Math.min(box.width, box.height) * 0.28);
+function withCompleteContours(component) {
+  const exteriorContours = cloneContours(component.contours || []);
+  const holeContours = (component.holes || []).flatMap(hole => cloneContours(hole.contours || []));
+  const contours = deduplicateContours([...exteriorContours, ...holeContours])
+    .filter(contour => contour.points.length >= 3)
+    .map(contour => ({ ...contour, closed: contour.closed !== false }));
+
+  return {
+    ...component,
+    contours,
+    topology: {
+      fillRule: 'evenodd',
+      contourCount: contours.length,
+      holeCount: holeContours.length
+    }
+  };
+}
+
+function cloneContours(contours) {
+  return (contours || []).map(contour => ({
+    closed: contour.closed !== false,
+    points: (contour.points || []).map(point => ({ x: point.x, y: point.y }))
+  }));
+}
+
+function deduplicateContours(contours) {
+  const seen = new Set();
+  const output = [];
+  for (const contour of contours || []) {
+    const points = contour.points || [];
+    if (points.length < 3) continue;
+    const bounds = getBounds(points);
+    const key = [
+      Math.round(bounds.minX),
+      Math.round(bounds.minY),
+      Math.round(bounds.maxX),
+      Math.round(bounds.maxY),
+      points.length
+    ].join(':');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(contour);
+  }
+  return output;
 }
 
 function isSimilarScale(a, b) {
@@ -127,14 +176,6 @@ function overlapRatio(a, b) {
   const y2 = Math.min(a.y + a.height, b.y + b.height);
   const overlap = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   return overlap / Math.max(1, Math.min(a.width * a.height, b.width * b.height));
-}
-
-function sortAroundCenter(points) {
-  if (points.length <= 2) return points;
-  const center = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
-  center.x /= points.length;
-  center.y /= points.length;
-  return [...points].sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
 }
 
 function simplifyPoints(points, maxPoints) {
