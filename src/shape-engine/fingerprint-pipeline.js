@@ -1,34 +1,66 @@
 import { buildDetectedFingerprintCore, buildProfileDNACore, buildProfileFingerprintCore } from './signature-builder.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
 import { buildRasterizedProfileFingerprintCore } from './svg-raster-signature.js';
+import { measureFingerprintBuild, observeFingerprintBuild } from '../observability/fingerprint-observer.js';
 
 export async function buildUnifiedFingerprint(source, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
   const kind = source?.kind || inferKind(source);
 
   if (kind === 'detected') {
-    return markUnified(buildDetectedFingerprintCore(source.object || source, settings), 'detected', 'contour');
+    return measureFingerprintBuild(
+      () => markUnified(buildDetectedFingerprintCore(source.object || source, settings), 'detected', 'contour'),
+      { sourceKind: 'detected', pipelineMode: 'contour' }
+    );
   }
 
   if (kind === 'profile') {
     const profile = source.profile || source;
     const raster = source.raster !== false;
+
     if (raster) {
       try {
-        const fingerprint = await buildRasterizedProfileFingerprintCore(profile, settings);
-        if (fingerprint) return markUnified(fingerprint, 'profile', 'svg-raster');
+        const fingerprint = await measureFingerprintBuild(
+          async () => {
+            const built = await buildRasterizedProfileFingerprintCore(profile, settings);
+            return built ? markUnified(built, 'profile', 'svg-raster') : null;
+          },
+          { sourceKind: 'profile', pipelineMode: 'svg-raster' }
+        );
+        if (fingerprint) return fingerprint;
       } catch (error) {
         console.warn('Rasterisation SVG ignoree', profile.reference, error);
       }
     }
-    return markUnified(buildProfileFingerprintCore(profile, settings), 'profile', 'svg-vector');
+
+    return measureFingerprintBuild(
+      () => markUnified(buildProfileFingerprintCore(profile, settings), 'profile', 'svg-vector'),
+      { sourceKind: 'profile', pipelineMode: 'svg-vector' }
+    );
   }
 
   throw new Error('Source de fingerprint non reconnue.');
 }
 
 export function buildUnifiedDNA(profile, pipelineSettings = {}) {
-  return buildProfileDNACore(profile, normalizePipelineSettings(pipelineSettings));
+  const dna = buildProfileDNACore(profile, normalizePipelineSettings(pipelineSettings));
+  if (dna?.descriptors) {
+    const observedFingerprint = observeFingerprintBuild({
+      descriptors: dna.descriptors,
+      summary: {
+        ...(dna.globalShape || {}),
+        contourCount: dna.topology?.contourCount,
+        source: 'svg-dna',
+        sourceKind: 'profile',
+        pipelineMode: 'svg-dna'
+      }
+    }, {
+      sourceKind: 'profile',
+      pipelineMode: 'svg-dna'
+    });
+    dna.observability = observedFingerprint.summary?.observability || null;
+  }
+  return dna;
 }
 
 function inferKind(source) {
