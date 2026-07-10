@@ -5,6 +5,11 @@ import {
   listAlgorithmTelemetry,
   resetAlgorithmTelemetry
 } from '../observability/algorithm-telemetry.js';
+import {
+  clearWorkerObservabilityReports,
+  getWorkerObservabilitySnapshot,
+  subscribeWorkerObservability
+} from '../observability/worker-telemetry-bridge.js';
 
 const homeScreen = document.querySelector('#screenHome');
 const appShell = document.querySelector('.app-shell');
@@ -14,6 +19,7 @@ let statusNode = null;
 let summaryNode = null;
 let registryNode = null;
 let telemetryNode = null;
+let consistencyNode = null;
 
 initialize();
 
@@ -32,15 +38,18 @@ function initialize() {
   screen.className = 'card hidden';
   screen.innerHTML = `
     <h2>Observabilite du moteur</h2>
-    <p class="hint">Toutes les mesures restent sur cet appareil. Les analyses executees dans un worker peuvent fournir leurs propres rapports dans les exports de benchmark.</p>
+    <p class="hint">Toutes les mesures restent sur cet appareil. Les donnees du Web Worker sont rapatriees automatiquement apres chaque analyse.</p>
     <p id="observabilityStatus" class="config-manager-status">Pret.</p>
     <div id="observabilitySummary" class="debug-summary-grid"></div>
 
     <h3>Registre des algorithmes</h3>
     <div id="observabilityRegistry" class="config-diff-output"></div>
 
-    <h3>Telemetrie de cette session</h3>
+    <h3>Telemetrie moteur</h3>
     <div id="observabilityTelemetry" class="config-diff-output"></div>
+
+    <h3>Coherence ancien moteur / registre</h3>
+    <div id="observabilityConsistency" class="config-diff-output"></div>
 
     <div class="config-actions">
       <button id="refreshObservabilityButton" class="button secondary compact-button">Actualiser</button>
@@ -54,11 +63,16 @@ function initialize() {
   summaryNode = screen.querySelector('#observabilitySummary');
   registryNode = screen.querySelector('#observabilityRegistry');
   telemetryNode = screen.querySelector('#observabilityTelemetry');
+  consistencyNode = screen.querySelector('#observabilityConsistency');
 
   screen.querySelector('#refreshObservabilityButton')?.addEventListener('click', renderDashboard);
   screen.querySelector('#exportObservabilityButton')?.addEventListener('click', exportReport);
   screen.querySelector('#resetObservabilityButton')?.addEventListener('click', resetMeasurements);
   screen.querySelector('#closeObservabilityButton')?.addEventListener('click', closeDashboard);
+
+  subscribeWorkerObservability(() => {
+    if (!screen?.classList.contains('hidden')) renderDashboard();
+  });
 }
 
 function openDashboard() {
@@ -74,18 +88,19 @@ function closeDashboard() {
 
 function renderDashboard() {
   const registry = getAlgorithmRegistrySnapshot();
-  const telemetry = listAlgorithmTelemetry();
+  const mainTelemetry = listAlgorithmTelemetry();
+  const worker = getWorkerObservabilitySnapshot();
+  const telemetry = mergeTelemetry(mainTelemetry, worker.algorithms || []);
   const executable = registry.algorithms.filter(item => item.executable).length;
   const experimental = registry.algorithms.filter(item => item.status === 'experimental').length;
   const errors = telemetry.reduce((sum, item) => sum + item.errors, 0);
-  const consistency = telemetry.filter(item => item.id.startsWith('consistency.'));
-  const divergences = consistency.filter(item => item.decisions?.degraded > 0).length;
+  const divergences = worker.consistency.filter(item => item.different > 0).length;
 
   summaryNode.innerHTML = [
     summaryCard('Algorithmes', registry.algorithms.length, `${executable} executables`),
-    summaryCard('Experimentaux', experimental, 'A valider par benchmark'),
+    summaryCard('Analyses worker', worker.summary.reports, `${worker.summary.telemetryReports} rapports`),
     summaryCard('Appels mesures', telemetry.reduce((sum, item) => sum + item.calls, 0), `${errors} erreurs`),
-    summaryCard('Coherence', consistency.length, `${divergences} divergences`)
+    summaryCard('Coherence', worker.consistency.length, `${divergences} divergences`)
   ].join('');
 
   registryNode.innerHTML = registry.algorithms.length
@@ -109,18 +124,31 @@ function renderDashboard() {
         <td>${item.errors}</td>
         <td>${escapeHtml(item.decisions?.recommendation || '-')}</td>
       </tr>`).join('')}</tbody></table>`
-    : '<p class="debug-empty">Aucune mesure dans le contexte principal pour cette session. Lance une analyse ou un benchmark, puis actualise.</p>';
+    : '<p class="debug-empty">Aucune mesure disponible. Lance une analyse ou un benchmark, puis actualise.</p>';
 
-  setStatus(`Actualise a ${new Date().toLocaleTimeString('fr-FR')}.`);
+  consistencyNode.innerHTML = worker.consistency.length
+    ? `<table class="config-diff-table"><thead><tr><th>Descripteur</th><th>Rapports</th><th>Egaux</th><th>Differents</th><th>Manquants</th><th>Migration</th></tr></thead><tbody>${worker.consistency.map(item => `
+      <tr>
+        <th>${escapeHtml(item.target)}</th>
+        <td>${item.reports}</td>
+        <td>${item.equal}</td>
+        <td>${item.different}</td>
+        <td>${item.missing}</td>
+        <td>${item.readyForMigration ? 'Prete' : 'Non'}</td>
+      </tr>`).join('')}</tbody></table>`
+    : '<p class="debug-empty">Aucun rapport de coherence recu depuis le worker.</p>';
+
+  setStatus(`Actualise a ${new Date().toLocaleTimeString('fr-FR')} · ${experimental} algorithmes experimentaux.`);
 }
 
 function exportReport() {
   const report = {
     type: 'ProfilScan observability dashboard export',
-    version: 'observability-dashboard-v1',
+    version: 'observability-dashboard-v2',
     generatedAt: new Date().toISOString(),
     registry: getAlgorithmRegistrySnapshot(),
-    telemetry: buildAlgorithmTelemetryReport({ source: 'pwa-main-thread' })
+    mainThreadTelemetry: buildAlgorithmTelemetryReport({ source: 'pwa-main-thread' }),
+    workerObservability: getWorkerObservabilitySnapshot()
   };
   const fileName = `profilscan-observability-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
   const blob = new Blob([JSON.stringify(report, null, 2) + '\n'], { type: 'application/json' });
@@ -137,8 +165,36 @@ function exportReport() {
 
 function resetMeasurements() {
   resetAlgorithmTelemetry();
+  clearWorkerObservabilityReports();
   renderDashboard();
-  setStatus('Mesures de cette session reinitialisees.');
+  setStatus('Mesures principales et worker reinitialisees.');
+}
+
+function mergeTelemetry(mainTelemetry, workerTelemetry) {
+  const map = new Map();
+  for (const item of [...mainTelemetry, ...workerTelemetry]) {
+    const current = map.get(item.id);
+    if (!current) {
+      map.set(item.id, item);
+      continue;
+    }
+    const calls = current.calls + item.calls;
+    map.set(item.id, {
+      ...current,
+      calls,
+      errors: current.errors + item.errors,
+      missing: current.missing + item.missing,
+      timing: {
+        totalMs: Number(current.timing?.totalMs || 0) + Number(item.timing?.totalMs || 0),
+        meanMs: calls
+          ? ((Number(current.timing?.meanMs || 0) * current.calls) + (Number(item.timing?.meanMs || 0) * item.calls)) / calls
+          : null,
+        p95Ms: Math.max(Number(current.timing?.p95Ms || 0), Number(item.timing?.p95Ms || 0))
+      },
+      decisions: item.decisions || current.decisions
+    });
+  }
+  return Array.from(map.values()).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function summaryCard(label, value, detail) {
