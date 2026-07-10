@@ -278,12 +278,8 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
       summary: firstItem?.summary || null,
       descriptorSizes: firstItem?.descriptorSizes || null
     },
-    radial: {
-      values: visual.radial || []
-    },
-    fourier: {
-      values: visual.fourier || []
-    },
+    radial: { values: visual.radial || [] },
+    fourier: { values: visual.fourier || [] },
     minutiae,
     localFeature,
     linking: {
@@ -414,13 +410,17 @@ function summarizeArray(arrayLike) {
 
 async function matchObject(object, collection, settings) {
   const fingerprint = buildUnifiedFingerprint({ kind: 'detected', object }, settings.pipelineSettings);
-  const top = findTopMatches(fingerprint, collection, settings.weights, 10);
+  const benchmarkMode = Boolean(settings.expectedReference);
+  const candidateLimit = benchmarkMode ? Math.max(1, collection?.profiles?.length || 1) : 10;
+  const top = findTopMatches(fingerprint, collection, settings.weights, candidateLimit);
   const winner = top[0] || { reference: '?', designation: 'Inconnu', score: 0, scoreDetails: null };
   return {
     ...winner,
     boundingBox: { x: object.x, y: object.y, width: object.width, height: object.height },
     sectionScore: object.sectionScore || 0,
     topCandidates: top,
+    candidateCount: top.length,
+    benchmarkMode,
     detectedFingerprintDebug: summarizeFingerprint(fingerprint)
   };
 }
