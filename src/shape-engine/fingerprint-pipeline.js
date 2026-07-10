@@ -4,6 +4,7 @@ import { normalizePipelineSettings } from './pipeline-settings.js';
 import { buildRasterizedProfileFingerprintCore } from './svg-raster-signature.js';
 import { measureFingerprintBuild, observeFingerprintBuild } from '../observability/fingerprint-observer.js';
 import { validateFingerprintDescriptors } from '../observability/descriptor-consistency.js';
+import { buildAlgorithmTelemetryReport } from '../observability/algorithm-telemetry.js';
 
 export async function buildUnifiedFingerprint(source, pipelineSettings = {}) {
   const settings = normalizePipelineSettings(pipelineSettings);
@@ -63,6 +64,11 @@ export function buildUnifiedDNA(profile, pipelineSettings = {}) {
       pipelineMode: 'svg-dna'
     });
     dna.observability = observedFingerprint.summary?.observability || null;
+    dna.observabilityTelemetry = buildAlgorithmTelemetryReport({
+      source: 'fingerprint-pipeline',
+      sourceKind: 'profile',
+      pipelineMode: 'svg-dna'
+    });
   }
   return dna;
 }
@@ -72,26 +78,33 @@ async function attachConsistencyReport(fingerprint) {
 
   try {
     const descriptorConsistency = await validateFingerprintDescriptors(fingerprint);
-    return {
-      ...fingerprint,
-      summary: {
-        ...fingerprint.summary,
-        descriptorConsistency
-      }
-    };
+    return attachTelemetry(fingerprint, descriptorConsistency);
   } catch (error) {
-    return {
-      ...fingerprint,
-      summary: {
-        ...fingerprint.summary,
-        descriptorConsistency: {
-          version: 'descriptor-consistency-v1',
-          valid: false,
-          error: String(error?.message || error)
-        }
-      }
-    };
+    return attachTelemetry(fingerprint, {
+      version: 'descriptor-consistency-v1',
+      valid: false,
+      error: String(error?.message || error)
+    });
   }
+}
+
+function attachTelemetry(fingerprint, descriptorConsistency) {
+  const sourceKind = fingerprint.summary?.sourceKind || 'unknown';
+  const pipelineMode = fingerprint.summary?.pipelineMode || 'unknown';
+
+  return {
+    ...fingerprint,
+    summary: {
+      ...fingerprint.summary,
+      descriptorConsistency,
+      observabilityTelemetry: buildAlgorithmTelemetryReport({
+        source: 'fingerprint-pipeline',
+        sourceKind,
+        pipelineMode,
+        reference: fingerprint.reference || null
+      })
+    }
+  };
 }
 
 function inferKind(source) {
