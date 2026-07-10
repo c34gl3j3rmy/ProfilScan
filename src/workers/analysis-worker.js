@@ -25,7 +25,7 @@ self.onmessage = async event => {
     const gray = buildGray(source.imageData, activeSettings.image);
     const denoised = suppressTexture(gray, source.width, source.height, activeSettings.image.textureSuppression);
     const blurred = blurGray(denoised, source.width, source.height, activeSettings.image.blurRadius);
-    const useFilledMaterial = activeSettings.inputMode === 'filled-material';
+    const useFilledMaterial = activeSettings.inputMode === 'filled-material' || Boolean(activeSettings.expectedReference);
     postProgress(
       40,
       useFilledMaterial ? 'Segmentation de la matiere' : 'Segmentation robuste',
@@ -251,7 +251,7 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
       scaledWidth: source.width,
       scaledHeight: source.height,
       scale: source.scale,
-      inputMode: activeSettings.inputMode
+      inputMode: useInputMode(activeSettings)
     },
     preprocessing: {
       settings: activeSettings.image,
@@ -339,6 +339,10 @@ function buildDebugPipeline({ imageBitmap, source, gray, denoised, blurred, acti
       }))
     }
   };
+}
+
+function useInputMode(settings) {
+  return settings.inputMode === 'filled-material' || settings.expectedReference ? 'filled-material' : 'edge-photo';
 }
 
 function summarizeFingerprint(fingerprint) {
