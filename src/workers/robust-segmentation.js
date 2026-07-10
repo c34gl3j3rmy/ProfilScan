@@ -16,6 +16,8 @@ export function buildRobustEdgeMask(gray, width, height, detectionSettings) {
   const best = strategies[0];
   return {
     mask: best.mask,
+    previewMask: best.mask,
+    filledMask: false,
     mode: best.name,
     stats: {
       score: best.score,
@@ -31,6 +33,36 @@ export function buildRobustEdgeMask(gray, width, height, detectionSettings) {
         componentCount: strategy.componentCount,
         largestRatio: strategy.largestRatio
       }))
+    }
+  };
+}
+
+export function buildFilledMaterialMask(gray, width, height) {
+  const threshold = otsuThreshold(gray);
+  const mask = new Uint8Array(gray.length);
+
+  for (let index = 0; index < gray.length; index++) {
+    mask[index] = gray[index] <= threshold ? 1 : 0;
+  }
+
+  const cleaned = removeTinyComponents(mask, width, height, Math.max(4, Math.round(width * height * 0.00001)));
+  const previewMask = boundaryFromMask(cleaned, width, height);
+  const stats = componentStats(cleaned, width, height);
+  const points = countMask(cleaned);
+
+  return {
+    mask: cleaned,
+    previewMask,
+    filledMask: true,
+    mode: 'filled-material-otsu',
+    stats: {
+      threshold,
+      points,
+      pointRatio: points / Math.max(1, width * height),
+      componentCount: stats.componentCount,
+      largestRatio: stats.largestRatio,
+      activePixels: points,
+      segmentationRole: 'material-mask'
     }
   };
 }
@@ -111,7 +143,7 @@ function otsuThreshold(gray) {
       bestThreshold = threshold;
     }
   }
-  return Math.max(40, Math.min(180, bestThreshold));
+  return Math.max(20, Math.min(220, bestThreshold));
 }
 
 function averageAround(gray, width, height, x, y, radius) {
@@ -133,13 +165,54 @@ function averageAround(gray, width, height, x, y, radius) {
 
 function boundaryFromMask(mask, width, height) {
   const output = new Uint8Array(mask.length);
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
       const index = y * width + x;
       if (!mask[index]) continue;
-      if (!mask[index - 1] || !mask[index + 1] || !mask[index - width] || !mask[index + width]) output[index] = 1;
+      if (
+        x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
+        !mask[index - 1] || !mask[index + 1] || !mask[index - width] || !mask[index + width]
+      ) output[index] = 1;
     }
   }
+  return output;
+}
+
+function removeTinyComponents(mask, width, height, minArea) {
+  const visited = new Uint8Array(mask.length);
+  const output = new Uint8Array(mask.length);
+  const queue = [];
+
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || visited[start]) continue;
+    queue.length = 0;
+    queue.push(start);
+    visited[start] = 1;
+
+    for (let q = 0; q < queue.length; q++) {
+      const current = queue[q];
+      const x = current % width;
+      const y = Math.floor(current / width);
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= height) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const xx = x + dx;
+          if (xx < 0 || xx >= width) continue;
+          const next = yy * width + xx;
+          if (!mask[next] || visited[next]) continue;
+          visited[next] = 1;
+          queue.push(next);
+        }
+      }
+    }
+
+    if (queue.length >= minArea) {
+      for (const index of queue) output[index] = 1;
+    }
+  }
+
   return output;
 }
 
