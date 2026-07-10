@@ -39,8 +39,41 @@
         <input id="replaceProfileDbInput" type="file" accept=".json,application/json" hidden>
       </label>
       <button id="pipelineSettingsButton" class="button ghost">Parametres du pipeline</button>
+      <button id="configManagerButton" class="button ghost">Gestionnaire de configurations<br><small>Importer, comparer, exporter et restaurer</small></button>
       <button id="resetAppButton" class="button ghost">Reinitialiser ProfilScan<br><small>Supprime la base locale, le cache et recharge l'application</small></button>
       <button id="signatureDebugButton" class="button ghost">Voir signatures profils de la base</button>
+    </section>
+
+    <section id="screenConfigManager" class="card hidden">
+      <h2>Gestionnaire de configurations</h2>
+      <p class="hint">Les optimisations restent locales tant qu'elles ne sont pas exportees puis validees dans le repository.</p>
+      <p id="configManagerStatus" class="config-manager-status">Chargement...</p>
+
+      <div class="config-summary-grid">
+        <article id="officialConfigSummary" class="config-summary-card"></article>
+        <article id="localConfigSummary" class="config-summary-card"></article>
+      </div>
+
+      <h3>Differences avec la configuration officielle</h3>
+      <div id="configDiffOutput" class="config-diff-output"></div>
+
+      <div class="config-actions">
+        <button id="applyLocalConfigButton" class="button primary compact-button">Appliquer la configuration locale</button>
+        <button id="restoreOfficialConfigButton" class="button ghost compact-button">Restaurer l'officielle</button>
+        <button id="exportConfigButton" class="button secondary compact-button">Exporter la locale</button>
+        <button id="exportCandidateConfigButton" class="button secondary compact-button">Exporter comme candidate Git</button>
+        <label class="button ghost compact-button">
+          Importer une configuration
+          <input id="importConfigInput" type="file" accept=".json,application/json" hidden>
+        </label>
+      </div>
+
+      <details class="debug-panel">
+        <summary>Cycle de promotion</summary>
+        <p class="hint"><strong>local-experimental</strong> reste sur cet appareil. <strong>candidate</strong> est exportable et doit etre validee par benchmark. <strong>validated-default</strong> est uniquement publiee depuis le repository.</p>
+      </details>
+
+      <button id="closeConfigManagerButton" class="button primary">Retour</button>
     </section>
 
     <section id="screenPipelineSettings" class="card hidden">
