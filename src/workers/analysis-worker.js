@@ -409,7 +409,7 @@ function summarizeArray(arrayLike) {
 }
 
 async function matchObject(object, collection, settings) {
-  const fingerprint = buildUnifiedFingerprint({ kind: 'detected', object }, settings.pipelineSettings);
+  const fingerprint = await buildUnifiedFingerprint({ kind: 'detected', object }, settings.pipelineSettings);
   const benchmarkMode = Boolean(settings.expectedReference);
   const candidateLimit = benchmarkMode ? Math.max(1, collection?.profiles?.length || 1) : 10;
   const top = findTopMatches(fingerprint, collection, settings.weights, candidateLimit);
