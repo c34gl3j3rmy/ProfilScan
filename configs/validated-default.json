@@ -1,0 +1,56 @@
+{
+  "type": "ProfilScan optimized settings",
+  "schemaVersion": "1.0",
+  "engineVersion": "shape-engine-v3",
+  "status": "validated-default",
+  "name": "validated-default",
+  "description": "Configuration officielle distribuee avec ProfilScan.",
+  "generatedAt": "2026-07-10T00:00:00.000Z",
+  "datasetVersion": "1.0.0",
+  "baseFingerprint": null,
+  "settings": {
+    "pipeline": {
+      "version": "common-pipeline-v2",
+      "fillGridSize": 96,
+      "contourPointCount": 240,
+      "sampleMaxSegmentLength": 0.8,
+      "radialBins": 64,
+      "fourierTerms": 16,
+      "angleBins": 16,
+      "simplifyEpsilon": 0.01,
+      "huSource": "filled-mask"
+    },
+    "weights": {
+      "ratio": 18,
+      "radial": 32,
+      "hu": 0,
+      "fourier": 8,
+      "angle": 28,
+      "fill": 4,
+      "minutiae": 10,
+      "localFeature": 14
+    },
+    "modules": {
+      "ratio": "validated",
+      "radial": "validated",
+      "hu": "non-evaluable",
+      "fourier": "validated",
+      "angle": "validated",
+      "fill": "validated",
+      "minutiae": "validated",
+      "localFeature": "validated",
+      "hausdorff": "experimental",
+      "shapeContext": "experimental",
+      "icp": "experimental",
+      "ransac": "disabled",
+      "zernike": "experimental"
+    },
+    "thresholds": {}
+  },
+  "benchmark": null,
+  "validation": {
+    "status": "repository-default",
+    "approvedBy": "repository",
+    "notes": "Valeurs de reference avant optimisation Shape Engine v3."
+  }
+}
