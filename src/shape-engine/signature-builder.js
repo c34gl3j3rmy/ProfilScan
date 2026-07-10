@@ -117,7 +117,7 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
   ];
 
   return {
-    version: '2.1',
+    version: '2.2',
     reference,
     values,
     contour: {
@@ -143,7 +143,8 @@ function buildFingerprint({ reference, width, height, ratio, surface, perimeter,
       source,
       huSource: filledShape.points.length ? settings.huSource : 'contour',
       pipelineVersion: settings.version,
-      sampleMaxSegmentLength: settings.sampleMaxSegmentLength
+      sampleMaxSegmentLength: settings.sampleMaxSegmentLength,
+      fourierNormalization: 'arc-length-energy-v2'
     }
   };
 }
@@ -376,20 +377,71 @@ function eta(mu, m00, p, q) {
 }
 
 function buildFourierDescriptor(points, terms) {
-  if (!points.length) return Array.from({ length: terms }, () => 0);
-  const values = [];
+  const openPoints = removeClosingDuplicate(points || []);
+  if (openPoints.length < 3) return Array.from({ length: terms }, () => 0);
+
+  const sampleCount = Math.max(64, terms * 8);
+  const sampled = resampleClosedByArcLength(openPoints, sampleCount);
+  if (sampled.length < 3) return Array.from({ length: terms }, () => 0);
+
+  const center = sampled.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+  center.x /= sampled.length;
+  center.y /= sampled.length;
+  const centered = sampled.map(point => ({ x: point.x - center.x, y: point.y - center.y }));
+
+  const magnitudes = [];
   for (let k = 1; k <= terms; k++) {
     let real = 0;
     let imaginary = 0;
-    for (let n = 0; n < points.length; n++) {
-      const angle = (-2 * Math.PI * k * n) / points.length;
-      real += points[n].x * Math.cos(angle) - points[n].y * Math.sin(angle);
-      imaginary += points[n].x * Math.sin(angle) + points[n].y * Math.cos(angle);
+    for (let n = 0; n < centered.length; n++) {
+      const angle = (-2 * Math.PI * k * n) / centered.length;
+      real += centered[n].x * Math.cos(angle) - centered[n].y * Math.sin(angle);
+      imaginary += centered[n].x * Math.sin(angle) + centered[n].y * Math.cos(angle);
     }
-    values.push(Math.hypot(real, imaginary) / points.length);
+    magnitudes.push(Math.hypot(real, imaginary) / centered.length);
   }
-  const base = values[0] || 1;
-  return values.map(value => value / base);
+
+  const energy = Math.sqrt(magnitudes.reduce((sum, value) => sum + value * value, 0));
+  if (!Number.isFinite(energy) || energy < 1e-12) return Array.from({ length: terms }, () => 0);
+  return magnitudes.map(value => value / energy);
+}
+
+function resampleClosedByArcLength(points, targetCount) {
+  const source = removeClosingDuplicate(points);
+  if (source.length < 2 || targetCount < 2) return source;
+
+  const closed = [...source, source[0]];
+  const cumulative = [0];
+  for (let index = 1; index < closed.length; index++) {
+    cumulative.push(cumulative[index - 1] + Math.hypot(closed[index].x - closed[index - 1].x, closed[index].y - closed[index - 1].y));
+  }
+  const total = cumulative[cumulative.length - 1];
+  if (!Number.isFinite(total) || total <= 1e-12) return [];
+
+  const output = [];
+  let segment = 1;
+  for (let sampleIndex = 0; sampleIndex < targetCount; sampleIndex++) {
+    const distance = total * sampleIndex / targetCount;
+    while (segment < cumulative.length - 1 && cumulative[segment] < distance) segment++;
+    const startDistance = cumulative[segment - 1];
+    const endDistance = cumulative[segment];
+    const ratio = endDistance > startDistance ? (distance - startDistance) / (endDistance - startDistance) : 0;
+    const a = closed[segment - 1];
+    const b = closed[segment];
+    output.push({
+      x: a.x + (b.x - a.x) * ratio,
+      y: a.y + (b.y - a.y) * ratio
+    });
+  }
+  return output;
+}
+
+function removeClosingDuplicate(points) {
+  if (!Array.isArray(points) || !points.length) return [];
+  const output = points.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (output.length > 1 && samePoint(output[0], output[output.length - 1])) output.pop();
+  return output;
 }
 
 function rectanglePoints(width, height) {
@@ -415,7 +467,7 @@ function simplifyPoints(points, epsilon) {
 
 function longestContour(contours) {
   if (!contours.length) return [];
-  const best = contours.reduce((currentBest, contour) => contour.points.length > currentBest.points.length ? contour : currentBest, contours[0]);
+  const best = contours.reduce((currentBest, contour) => contourLength(contour.points || []) > contourLength(currentBest.points || []) ? contour : currentBest, contours[0]);
   return best.points || [];
 }
 
