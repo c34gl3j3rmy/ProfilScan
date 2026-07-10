@@ -4,13 +4,23 @@ const VALID_STAGES = new Set(['preprocessing', 'segmentation', 'geometry', 'desc
 const registry = new Map();
 
 export function registerAlgorithm(definition) {
-  const normalized = normalizeDefinition(definition);
-  if (registry.has(normalized.id)) {
-    const previous = registry.get(normalized.id);
-    if (previous.version === normalized.version) return previous;
-  }
+  const id = String(definition?.id || '').trim();
+  const previous = registry.get(id) || null;
+  const merged = previous ? mergeDefinitions(previous, definition) : definition;
+  const normalized = normalizeDefinition(merged);
   registry.set(normalized.id, Object.freeze(normalized));
   return registry.get(normalized.id);
+}
+
+export function attachAlgorithmRuntime(id, runtime = {}) {
+  const previous = getAlgorithm(id);
+  if (!previous) throw new Error(`Algorithme inconnu : ${id}`);
+  return registerAlgorithm({
+    ...previous,
+    compute: runtime.compute ?? previous.compute,
+    compare: runtime.compare ?? previous.compare,
+    visualize: runtime.visualize ?? previous.visualize
+  });
 }
 
 export function unregisterAlgorithm(id) {
@@ -36,7 +46,7 @@ export function getEnabledAlgorithms() {
 
 export function getAlgorithmRegistrySnapshot() {
   return {
-    version: 'algorithm-registry-v1',
+    version: 'algorithm-registry-v1.1',
     generatedAt: new Date().toISOString(),
     algorithms: listAlgorithms().map(item => ({
       id: item.id,
@@ -48,6 +58,9 @@ export function getAlgorithmRegistrySnapshot() {
       produces: [...item.produces],
       benchmarkable: item.benchmarkable,
       observable: item.observable,
+      executable: typeof item.compute === 'function',
+      comparable: typeof item.compare === 'function',
+      visualizable: typeof item.visualize === 'function',
       tags: [...item.tags]
     }))
   };
@@ -62,6 +75,7 @@ export function validateAlgorithmDependencies(availableOutputs = []) {
     rows.push({
       id: algorithm.id,
       valid: missing.length === 0,
+      executable: typeof algorithm.compute === 'function',
       missing
     });
     if (!missing.length) algorithm.produces.forEach(output => available.add(output));
@@ -71,6 +85,20 @@ export function validateAlgorithmDependencies(availableOutputs = []) {
     valid: rows.every(row => row.valid),
     availableOutputs: Array.from(available).sort(),
     algorithms: rows
+  };
+}
+
+function mergeDefinitions(previous, next = {}) {
+  return {
+    ...previous,
+    ...next,
+    id: previous.id,
+    requires: next.requires ?? previous.requires,
+    produces: next.produces ?? previous.produces,
+    tags: next.tags ?? previous.tags,
+    compute: next.compute ?? previous.compute,
+    compare: next.compare ?? previous.compare,
+    visualize: next.visualize ?? previous.visualize
   };
 }
 
