@@ -116,7 +116,10 @@ function compareBaseFingerprintScores(detected, reference, customWeights = null)
   const angle = compareCircularVectors(detected.descriptors?.angleHistogram, reference.descriptors?.angleHistogram, 1);
   const huScore = compareVectors(detected.descriptors?.hu, reference.descriptors?.hu, 20);
   const fourierScore = compareVectors(detected.descriptors?.fourier, reference.descriptors?.fourier, 1.4);
-  const fillScore = compareFillRatio(detected.summary?.fillRatio ?? detected.fillRatio);
+  const fillScore = compareFillRatio(
+    detected.summary?.fillRatio ?? detected.fillRatio,
+    reference.summary?.fillRatio ?? reference.fillRatio
+  );
   const minutiaeScore = compareMinutiaeSignatures(detected.descriptors?.minutiae, reference.descriptors?.minutiae);
   const localFeatureScore = compareLocalFeatures(detected, reference);
 
@@ -344,10 +347,12 @@ function compareVectors(a, b, distanceScale = 1) {
   return clampScore(100 * (1 - averageDistance / distanceScale));
 }
 
-function compareFillRatio(fillRatio) {
-  if (!Number.isFinite(fillRatio) || fillRatio <= 0) return 50;
-  if (fillRatio > 0.02 && fillRatio < 0.85) return 100;
-  return 40;
+function compareFillRatio(detectedFillRatio, referenceFillRatio) {
+  if (!Number.isFinite(detectedFillRatio) || !Number.isFinite(referenceFillRatio)) return 0;
+  if (detectedFillRatio <= 0 || referenceFillRatio <= 0) return 0;
+  const scale = Math.max(detectedFillRatio, referenceFillRatio, 1e-6);
+  const relativeDifference = Math.abs(detectedFillRatio - referenceFillRatio) / scale;
+  return clampScore(100 * (1 - relativeDifference));
 }
 
 function clampScore(score) {
