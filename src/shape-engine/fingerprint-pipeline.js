@@ -1,3 +1,4 @@
+import '../observability/core-algorithm-runtime.js';
 import { buildDetectedFingerprintCore, buildProfileDNACore, buildProfileFingerprintCore } from './signature-builder.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
 import { buildRasterizedProfileFingerprintCore } from './svg-raster-signature.js';
