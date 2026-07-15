@@ -14,7 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Patch benchmark
+        shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import
+          python -c "from pathlib import Path; p=Path('src/app/batch-benchmark.js'); s=p.read_text(encoding='utf-8'); old=\"import { buildWeightPresetBenchmark } from './benchmark-weight-presets.js';\"; new=\"import { buildWeightPresetBenchmark, CANDIDATE_WEIGHT_PRESET_NAME } from './benchmark-weight-presets.js';\"; assert old in s, 'import target missing'; s=s.replace(old,new,1); old=\"  'icp', 'ransac', 'zernike'\"; new=\"  'icp', 'ransac', 'zernike', 'efd', 'structural'\"; assert old in s, 'algorithm target missing'; s=s.replace(old,new,1); old=\"    version: 'batch-benchmark-full-ranking-v2',\"; new=\"    version: 'batch-benchmark-full-ranking-v3',\\n    candidateConfiguration: CANDIDATE_WEIGHT_PRESET_NAME,\"; assert old in s, 'version target missing'; s=s.replace(old,new,1); p.write_text(s,encoding='utf-8')"
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'Benchmark already patched.'
+            exit 
