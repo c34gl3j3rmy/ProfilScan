@@ -1,0 +1,26 @@
+{
+  "src/app/batch-benchmark.js": {
+    "ok": true,
+    "stderr": ""
+  },
+  "src/app/benchmark/benchmark-algorithms.js": {
+    "ok": true,
+    "stderr": ""
+  },
+  "src/app/benchmark/benchmark-diagnostics.js": {
+    "ok": true,
+    "stderr": ""
+  },
+  "src/app/benchmark/benchmark-report.js": {
+    "ok": true,
+    "stderr": ""
+  },
+  "src/app/benchmark/benchmark-ui.js": {
+    "ok": true,
+    "stderr": ""
+  },
+  "src/app/benchmark/benchmark-utils.js": {
+    "ok": true,
+    "stderr": ""
+  }
+}
