@@ -7,4 +7,19 @@ export function buildStructuralSignature(contours, options = {}) {
   const gridSize = positiveInteger(options.gridSize, DEFAULT_GRID_SIZE);
   const projectionBins = positiveInteger(options.projectionBins, DEFAULT_PROJECTION_BINS);
   const normalizedContours = normalizeContours(contours);
-  const mask = raster
+  const mask = rasterizeContours(normalizedContours, gridSize);
+  const skeleton = thinMask(mask, gridSize);
+  const topology = analyzeSkeleton(skeleton, gridSize);
+  const projections = buildProjections(mask, gridSize, projectionBins);
+  const orientation = buildOrientationHistogram(skeleton, gridSize);
+  const occupied = mask.reduce((sum, value) => sum + value, 0);
+
+  return {
+    version: 'structural-signature-v1',
+    valid: occupied > 0 && topology.skeletonPixels > 0,
+    gridSize,
+    projectionBins,
+    topology,
+    projections,
+    orientation,
+    fill
