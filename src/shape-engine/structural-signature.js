@@ -8,4 +8,6 @@ export function buildStructuralSignature(contours, options = {}) {
   const projectionBins = positiveInteger(options.projectionBins, DEFAULT_PROJECTION_BINS);
   const normalizedContours = normalizeContours(contours);
   const mask = rasterizeContours(normalizedContours, gridSize);
-  const
+  const skeleton = thinMask(mask, gridSize);
+  const topology = analyzeSkeleton(skeleton, gridSize);
+  const projections =
