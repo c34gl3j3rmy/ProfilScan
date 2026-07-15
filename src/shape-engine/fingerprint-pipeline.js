@@ -2,6 +2,8 @@ import '../observability/core-algorithm-runtime.js';
 import { buildDetectedFingerprintCore, buildProfileDNACore, buildProfileFingerprintCore } from './signature-builder.js';
 import { normalizePipelineSettings } from './pipeline-settings.js';
 import { buildRasterizedProfileFingerprintCore } from './svg-raster-signature.js';
+import { buildEllipticFourierDescriptor } from './elliptic-fourier.js';
+import { buildStructuralSignature } from './structural-signature.js';
 import { measureFingerprintBuild, observeFingerprintBuild } from '../observability/fingerprint-observer.js';
 import { validateFingerprintDescriptors } from '../observability/descriptor-consistency.js';
 import { buildAlgorithmTelemetryReport } from '../observability/algorithm-telemetry.js';
@@ -12,7 +14,7 @@ export async function buildUnifiedFingerprint(source, pipelineSettings = {}) {
 
   if (kind === 'detected') {
     const fingerprint = await measureFingerprintBuild(
-      () => markUnified(buildDetectedFingerprintCore(source.object || source, settings), 'detected', 'contour'),
+      () => markUnified(enrichExperimentalDescriptors(buildDetectedFingerprintCore(source.object || source, settings), settings), 'detected', 'contour'),
       { sourceKind: 'detected', pipelineMode: 'contour' }
     );
     return attachConsistencyReport(fingerprint);
@@ -27,7 +29,7 @@ export async function buildUnifiedFingerprint(source, pipelineSettings = {}) {
         const fingerprint = await measureFingerprintBuild(
           async () => {
             const built = await buildRasterizedProfileFingerprintCore(profile, settings);
-            return built ? markUnified(built, 'profile', 'svg-raster') : null;
+            return built ? markUnified(enrichExperimentalDescriptors(built, settings), 'profile', 'svg-raster') : null;
           },
           { sourceKind: 'profile', pipelineMode: 'svg-raster' }
         );
@@ -38,7 +40,7 @@ export async function buildUnifiedFingerprint(source, pipelineSettings = {}) {
     }
 
     const fingerprint = await measureFingerprintBuild(
-      () => markUnified(buildProfileFingerprintCore(profile, settings), 'profile', 'svg-vector'),
+      () => markUnified(enrichExperimentalDescriptors(buildProfileFingerprintCore(profile, settings), settings), 'profile', 'svg-vector'),
       { sourceKind: 'profile', pipelineMode: 'svg-vector' }
     );
     return attachConsistencyReport(fingerprint);
@@ -48,8 +50,16 @@ export async function buildUnifiedFingerprint(source, pipelineSettings = {}) {
 }
 
 export function buildUnifiedDNA(profile, pipelineSettings = {}) {
-  const dna = buildProfileDNACore(profile, normalizePipelineSettings(pipelineSettings));
+  const settings = normalizePipelineSettings(pipelineSettings);
+  const dna = buildProfileDNACore(profile, settings);
   if (dna?.descriptors) {
+    const enriched = enrichExperimentalDescriptors({
+      descriptors: dna.descriptors,
+      contour: dna.contour,
+      summary: dna.globalShape || {}
+    }, settings);
+    dna.descriptors = enriched.descriptors;
+
     const observedFingerprint = observeFingerprintBuild({
       descriptors: dna.descriptors,
       summary: {
@@ -71,6 +81,37 @@ export function buildUnifiedDNA(profile, pipelineSettings = {}) {
     });
   }
   return dna;
+}
+
+function enrichExperimentalDescriptors(fingerprint, settings = {}) {
+  if (!fingerprint) return fingerprint;
+  const contours = fingerprint.descriptors?.contours || fingerprint.contour?.contours || [];
+  if (!Array.isArray(contours) || !contours.length) return fingerprint;
+
+  const descriptors = { ...(fingerprint.descriptors || {}) };
+  if (!descriptors.efd) {
+    descriptors.efd = buildEllipticFourierDescriptor(contours, {
+      harmonics: Number(settings.efdHarmonics) || 12
+    });
+  }
+  if (!descriptors.structural) {
+    descriptors.structural = buildStructuralSignature(contours, {
+      gridSize: Number(settings.structuralGridSize) || 96,
+      projectionBins: Number(settings.structuralProjectionBins) || 12
+    });
+  }
+
+  return {
+    ...fingerprint,
+    descriptors,
+    summary: {
+      ...(fingerprint.summary || {}),
+      experimentalDescriptors: {
+        efd: Boolean(descriptors.efd?.quality?.valid),
+        structural: Boolean(descriptors.structural?.quality?.valid)
+      }
+    }
+  };
 }
 
 async function attachConsistencyReport(fingerprint) {
