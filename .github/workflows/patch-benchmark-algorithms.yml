@@ -1,9 +1,10 @@
-name: Apply benchmark algorithm integration patch
+name: Patch benchmark algorithms
 
 on:
   push:
     paths:
       - '.github/workflows/patch-benchmark-algorithms.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,22 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Patch batch benchmark safely
+      - name: Patch benchmark
         run: |
           python - <<'PY'
-          from pathlib import Path
-
-          path = Path('src/app/batch-benchmark.js')
-          text = path.read_text(encoding='utf-8')
-
-          replacements = [
-              (
-                  "import { buildWeightPresetBenchmark } from './benchmark-weight-presets.js';",
-                  "import { buildWeightPresetBenchmark, CANDIDATE
+          from pathlib import
