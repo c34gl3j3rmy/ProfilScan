@@ -1,26 +1,22 @@
 {
-  "src/app/batch-benchmark.js": {
+  "src/app/shared/common-utils.js": {
     "ok": true,
+    "lines": 75,
     "stderr": ""
   },
-  "src/app/benchmark/benchmark-algorithms.js": {
+  "src/app/visual-compare/canvas-tools.js": {
     "ok": true,
+    "lines": 298,
     "stderr": ""
   },
-  "src/app/benchmark/benchmark-diagnostics.js": {
+  "src/app/visual-compare/diagnostics.js": {
     "ok": true,
+    "lines": 76,
     "stderr": ""
   },
-  "src/app/benchmark/benchmark-report.js": {
+  "src/app/visual-compare.js": {
     "ok": true,
-    "stderr": ""
-  },
-  "src/app/benchmark/benchmark-ui.js": {
-    "ok": true,
-    "stderr": ""
-  },
-  "src/app/benchmark/benchmark-utils.js": {
-    "ok": true,
+    "lines": 371,
     "stderr": ""
   }
 }

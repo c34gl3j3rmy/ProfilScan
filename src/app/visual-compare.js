@@ -2,6 +2,38 @@ import { loadImageFile } from './image-import.js';
 import { renderSvgTextToBitmap } from './svg-rasterizer.js';
 import { computeAutoImageSettings } from './auto-settings.js';
 import { getCollection } from '../storage/indexed-db.js';
+import {
+  formatError,
+  numberOrNull,
+  numericDiff,
+  positiveNumber,
+  round,
+  sameReference,
+  timestampForFile
+} from './shared/common-utils.js';
+import {
+  analyzeCanvas,
+  bboxFill,
+  canvasMask,
+  compareMasks,
+  compareNormalizedBBoxes,
+  cropToBbox,
+  drawBitmapToCanvas,
+  drawDiff,
+  drawPanel,
+  drawScoreChart,
+  normalizedMask,
+  renderScoreRows,
+  setPixel
+} from './visual-compare/canvas-tools.js';
+import {
+  buildScoreDiagnostics,
+  compareStep,
+  pickNumericMap,
+  statusStep,
+  summarizeScoreDetails,
+  summarizeStoredSignature
+} from './visual-compare/diagnostics.js';
 
 const fileInput = document.querySelector('#fileInput');
 const referenceInput = document.querySelector('#referenceInput');
@@ -225,256 +257,6 @@ function buildPipelineInspection(uploadCanvas, expectedCanvas, expectedProfile, 
   };
 }
 
-function summarizeStoredSignature(profile) {
-  const fingerprint = profile.fingerprint || profile.dna || {};
-  const descriptors = fingerprint.descriptors || profile.dna?.descriptors || {};
-  const minutiae = fingerprint.subsignatures?.minutiae || descriptors.minutiae || fingerprint.minutiae || {};
-  const localFeature = fingerprint.subsignatures?.localFeature || descriptors.localFeature || fingerprint.localFeature || {};
-  return {
-    pipelineMode: fingerprint.summary?.pipelineMode || null,
-    fillRatio: round(fingerprint.summary?.fillRatio),
-    radialBins: Array.isArray(descriptors.radial) ? descriptors.radial.length : null,
-    fourierTerms: Array.isArray(descriptors.fourier) ? descriptors.fourier.length : null,
-    angleBins: Array.isArray(descriptors.angle) ? descriptors.angle.length : null,
-    minutiaeCounts: minutiae.counts || null,
-    localFeatures: localFeature.features || null
-  };
-}
-
-function buildScoreDiagnostics(workerDiagnostics, expectedReference) {
-  const top1 = workerDiagnostics?.topCandidates?.[0] || null;
-  const expected = workerDiagnostics?.expectedCandidate || null;
-  const topScores = top1?.scoreSummary?.subscores || {};
-  const expectedScores = expected?.scoreSummary?.subscores || {};
-  const keys = Array.from(new Set([...Object.keys(topScores), ...Object.keys(expectedScores)]));
-  const deltas = keys.map(key => ({
-    key,
-    top1: numberOrNull(topScores[key]),
-    expected: numberOrNull(expectedScores[key]),
-    deltaExpectedMinusTop1: numericDiff(expectedScores[key], topScores[key])
-  })).filter(row => row.top1 !== null || row.expected !== null);
-  const penalties = deltas.filter(row => Number.isFinite(row.deltaExpectedMinusTop1) && row.deltaExpectedMinusTop1 < 0).sort((a, b) => a.deltaExpectedMinusTop1 - b.deltaExpectedMinusTop1);
-  const helps = deltas.filter(row => Number.isFinite(row.deltaExpectedMinusTop1) && row.deltaExpectedMinusTop1 > 0).sort((a, b) => b.deltaExpectedMinusTop1 - a.deltaExpectedMinusTop1);
-  return {
-    expectedReference,
-    top1Reference: top1?.reference || null,
-    expectedRank: expected?.rank || null,
-    top1Score: top1?.score ?? null,
-    expectedScore: expected?.score ?? null,
-    scoreGap: numericDiff(top1?.score, expected?.score),
-    strongestPenalty: penalties[0] || null,
-    strongestHelp: helps[0] || null,
-    deltas,
-    top1Subscores: topScores,
-    expectedSubscores: expectedScores
-  };
-}
-
-function summarizeScoreDetails(scoreDetails) {
-  return {
-    total: round(scoreDetails?.total ?? scoreDetails?.score),
-    weighted: pickNumericMap(scoreDetails?.weighted),
-    subscores: pickNumericMap(scoreDetails?.subscores),
-    gates: pickNumericMap(scoreDetails?.gates),
-    penalties: pickNumericMap(scoreDetails?.penalties),
-    advanced: pickNumericMap(scoreDetails?.advanced)
-  };
-}
-
-function pickNumericMap(value) {
-  if (!value || typeof value !== 'object') return {};
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => Number.isFinite(Number(entry))).map(([key, entry]) => [key, round(entry)]));
-}
-
-function compareStep(key, label, uploadedValue, expectedValue, tolerance, hint) {
-  const diff = numericDiff(uploadedValue, expectedValue);
-  const status = diff === null ? 'unknown' : Math.abs(diff) <= tolerance ? 'ok' : 'mismatch';
-  return { key, label, uploadedValue, expectedValue, difference: diff, tolerance, status, hint: status === 'mismatch' ? hint : null };
-}
-
-function statusStep(key, label, status, value, hint) {
-  return { key, label, uploadedValue: value, expectedValue: 'ok', difference: null, tolerance: null, status, hint: status === 'mismatch' ? hint : null };
-}
-
-function compareNormalizedBBoxes(uploadCanvas, expectedCanvas) {
-  const size = 512;
-  const left = cropToBbox(uploadCanvas, size);
-  const right = cropToBbox(expectedCanvas, size);
-  const diff = compareMasks(canvasMask(left), canvasMask(right));
-  return { size, ...diff };
-}
-
-function cropToBbox(sourceCanvas, size) {
-  const stats = analyzeCanvas(sourceCanvas);
-  const target = document.createElement('canvas');
-  target.width = size;
-  target.height = size;
-  const ctx = target.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, size, size);
-  if (!stats.bbox) return target;
-  const margin = 24;
-  const scale = Math.min((size - margin * 2) / stats.bbox.width, (size - margin * 2) / stats.bbox.height);
-  const drawWidth = stats.bbox.width * scale;
-  const drawHeight = stats.bbox.height * scale;
-  ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(sourceCanvas, stats.bbox.x, stats.bbox.y, stats.bbox.width, stats.bbox.height, (size - drawWidth) / 2, (size - drawHeight) / 2, drawWidth, drawHeight);
-  return target;
-}
-
-function drawBitmapToCanvas(bitmap, canvas, label) {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const maxSize = 720;
-  const scale = Math.min(maxSize / bitmap.width, maxSize / bitmap.height, 1);
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  const stats = analyzeCanvas(canvas);
-  stats.label = label;
-  stats.sourceWidth = bitmap.width;
-  stats.sourceHeight = bitmap.height;
-  return { canvas, stats };
-}
-
-function drawDiff(uploaded, expected, output) {
-  const width = Math.max(uploaded.width, expected.width);
-  const height = Math.max(uploaded.height, expected.height);
-  output.width = width;
-  output.height = height;
-
-  const ctx = output.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-
-  const left = normalizedMask(uploaded, width, height);
-  const right = normalizedMask(expected, width, height);
-  const diff = compareMasks(left, right);
-  const image = ctx.createImageData(width, height);
-
-  for (let i = 0; i < left.length; i++) {
-    const a = left[i];
-    const b = right[i];
-    const offset = i * 4;
-    if (a && b) setPixel(image.data, offset, 0, 0, 0);
-    else if (a) setPixel(image.data, offset, 220, 38, 38);
-    else if (b) setPixel(image.data, offset, 37, 99, 235);
-    else setPixel(image.data, offset, 255, 255, 255);
-  }
-
-  ctx.putImageData(image, 0, 0);
-  const stats = {
-    label: 'Difference visuelle',
-    width,
-    height,
-    commonPixels: diff.commonPixels,
-    onlyUploadPixels: diff.onlyUploadPixels,
-    onlyExpectedPixels: diff.onlyExpectedPixels,
-    emptyPixels: diff.emptyPixels,
-    similarityPercent: diff.similarityPercent,
-    differencePercent: diff.differencePercent,
-    legend: 'noir=commun, rouge=upload seul, bleu=attendu seul'
-  };
-  return { canvas: output, stats };
-}
-
-function compareMasks(left, right) {
-  let common = 0;
-  let onlyUpload = 0;
-  let onlyExpected = 0;
-  let empty = 0;
-  for (let i = 0; i < left.length; i++) {
-    const a = left[i];
-    const b = right[i];
-    if (a && b) common++;
-    else if (a) onlyUpload++;
-    else if (b) onlyExpected++;
-    else empty++;
-  }
-  const union = common + onlyUpload + onlyExpected;
-  return {
-    commonPixels: common,
-    onlyUploadPixels: onlyUpload,
-    onlyExpectedPixels: onlyExpected,
-    emptyPixels: empty,
-    similarityPercent: union ? round(common / union * 100) : 100,
-    differencePercent: union ? round((onlyUpload + onlyExpected) / union * 100) : 0
-  };
-}
-
-function normalizedMask(sourceCanvas, width, height) {
-  const temp = document.createElement('canvas');
-  temp.width = width;
-  temp.height = height;
-  const ctx = temp.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-  const scale = Math.min(width / sourceCanvas.width, height / sourceCanvas.height);
-  const drawWidth = sourceCanvas.width * scale;
-  const drawHeight = sourceCanvas.height * scale;
-  const offsetX = (width - drawWidth) / 2;
-  const offsetY = (height - drawHeight) / 2;
-  ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight);
-  return canvasMask(temp);
-}
-
-function analyzeCanvas(canvas) {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  let dark = 0;
-  let minX = canvas.width;
-  let minY = canvas.height;
-  let maxX = -1;
-  let maxY = -1;
-
-  for (let y = 0; y < canvas.height; y++) {
-    for (let x = 0; x < canvas.width; x++) {
-      const offset = (y * canvas.width + x) * 4;
-      if (isDark(data[offset], data[offset + 1], data[offset + 2], data[offset + 3])) {
-        dark++;
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-      }
-    }
-  }
-
-  const bboxWidth = maxX >= minX ? maxX - minX + 1 : 0;
-  const bboxHeight = maxY >= minY ? maxY - minY + 1 : 0;
-  return {
-    width: canvas.width,
-    height: canvas.height,
-    ratio: round(canvas.width / canvas.height),
-    darkPixels: dark,
-    darkPercent: round(dark / (canvas.width * canvas.height) * 100),
-    bbox: bboxWidth ? { x: minX, y: minY, width: bboxWidth, height: bboxHeight, ratio: round(bboxWidth / bboxHeight) } : null
-  };
-}
-
-function bboxFill(stats) {
-  if (!stats?.bbox) return null;
-  return round(stats.darkPixels / (stats.bbox.width * stats.bbox.height));
-}
-
-function canvasMask(canvas) {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const mask = new Uint8Array(canvas.width * canvas.height);
-  for (let i = 0; i < mask.length; i++) {
-    const offset = i * 4;
-    mask[i] = isDark(data[offset], data[offset + 1], data[offset + 2], data[offset + 3]) ? 1 : 0;
-  }
-  return mask;
-}
-
-function isDark(r, g, b, a) {
-  if (a < 20) return false;
-  return (r + g + b) / 3 < 180;
-}
 
 function renderStats(table, stats) {
   table.innerHTML = '';
@@ -529,102 +311,6 @@ function renderSignatureInspection(pipeline) {
   renderScoreRows(signatureInspector.table, rows);
 }
 
-function drawScoreChart(canvas, rows) {
-  const ctx = canvas.getContext('2d');
-  const width = canvas.width;
-  const height = canvas.height;
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = '#111827';
-  ctx.font = 'bold 22px sans-serif';
-  ctx.fillText('Sous-scores Top1 vs profil attendu', 28, 36);
-  ctx.font = '14px sans-serif';
-  ctx.fillText('Top1 = barre haute · attendu = barre basse · delta attendu-Top1 : positif favorable, negatif penalisant', 28, 62);
-
-  if (!rows.length) {
-    ctx.font = '18px sans-serif';
-    ctx.fillText('Aucun sous-score comparable : le profil attendu est probablement absent du Top10.', 28, 130);
-    return;
-  }
-
-  const plotX = 70;
-  const plotY = 95;
-  const plotWidth = width - 120;
-  const plotHeight = 320;
-  const maxScore = Math.max(1, ...rows.flatMap(row => [Number(row.top1) || 0, Number(row.expected) || 0]));
-  const groupWidth = plotWidth / rows.length;
-  const barWidth = Math.max(10, Math.min(34, groupWidth * 0.32));
-
-  ctx.strokeStyle = '#d1d5db';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 5; i++) {
-    const y = plotY + plotHeight - (i / 5) * plotHeight;
-    ctx.beginPath();
-    ctx.moveTo(plotX, y);
-    ctx.lineTo(plotX + plotWidth, y);
-    ctx.stroke();
-    ctx.fillStyle = '#6b7280';
-    ctx.fillText(String(round((i / 5) * maxScore)), 18, y + 5);
-  }
-
-  rows.forEach((row, index) => {
-    const center = plotX + index * groupWidth + groupWidth / 2;
-    const topHeight = ((Number(row.top1) || 0) / maxScore) * plotHeight;
-    const expectedHeight = ((Number(row.expected) || 0) / maxScore) * plotHeight;
-    const topX = center - barWidth - 2;
-    const expectedX = center + 2;
-    const baseY = plotY + plotHeight;
-
-    ctx.fillStyle = '#64748b';
-    ctx.fillRect(topX, baseY - topHeight, barWidth, topHeight);
-    ctx.fillStyle = Number(row.deltaExpectedMinusTop1) >= 0 ? '#166534' : '#b91c1c';
-    ctx.fillRect(expectedX, baseY - expectedHeight, barWidth, expectedHeight);
-
-    ctx.save();
-    ctx.translate(center - 4, plotY + plotHeight + 92);
-    ctx.rotate(-Math.PI / 4);
-    ctx.fillStyle = '#111827';
-    ctx.font = '13px sans-serif';
-    ctx.fillText(row.key, 0, 0);
-    ctx.restore();
-  });
-
-  ctx.fillStyle = '#64748b';
-  ctx.fillRect(plotX, height - 55, 18, 12);
-  ctx.fillStyle = '#111827';
-  ctx.fillText('Top1', plotX + 26, height - 44);
-  ctx.fillStyle = '#166534';
-  ctx.fillRect(plotX + 110, height - 55, 18, 12);
-  ctx.fillStyle = '#111827';
-  ctx.fillText('Attendu meilleur ou egal', plotX + 136, height - 44);
-  ctx.fillStyle = '#b91c1c';
-  ctx.fillRect(plotX + 330, height - 55, 18, 12);
-  ctx.fillStyle = '#111827';
-  ctx.fillText('Attendu penalise', plotX + 356, height - 44);
-}
-
-function renderScoreRows(table, rows) {
-  table.innerHTML = '';
-  const header = document.createElement('tr');
-  ['descripteur', 'Top1', 'attendu', 'delta attendu-Top1'].forEach(text => {
-    const th = document.createElement('th');
-    th.textContent = text;
-    header.appendChild(th);
-  });
-  table.appendChild(header);
-  rows.forEach(row => {
-    const tr = document.createElement('tr');
-    [row.key, row.top1, row.expected, row.deltaExpectedMinusTop1].forEach((value, index) => {
-      const td = document.createElement('td');
-      td.textContent = value === null || value === undefined ? '-' : String(value);
-      if (index === 3 && Number(value) < 0) td.className = 'warn';
-      if (index === 3 && Number(value) > 0) td.className = 'ok';
-      tr.appendChild(td);
-    });
-    table.appendChild(tr);
-  });
-}
 
 function addStageRow(label, status, detail) {
   const row = document.createElement('tr');
@@ -665,25 +351,6 @@ function downloadComparisonPng() {
   link.click();
 }
 
-function drawPanel(ctx, source, x, y, width, height, title) {
-  ctx.strokeStyle = '#cbd5df';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(x, y, width, height);
-  ctx.fillStyle = '#111827';
-  ctx.font = 'bold 20px sans-serif';
-  ctx.fillText(title, x, y - 12);
-  const scale = Math.min((width - 24) / source.width, (height - 24) / source.height);
-  const drawWidth = source.width * scale;
-  const drawHeight = source.height * scale;
-  ctx.drawImage(source, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
-}
-
-function setPixel(data, offset, r, g, b) {
-  data[offset] = r;
-  data[offset + 1] = g;
-  data[offset + 2] = b;
-  data[offset + 3] = 255;
-}
 
 function setStatus(message, isError = false) {
   if (!statusNode) return;
@@ -696,45 +363,9 @@ function referenceFromFilename(fileName) {
   return (dot > 0 ? fileName.slice(0, dot) : fileName).trim().replace(/\.min$/i, '');
 }
 
-function sameReference(a, b) {
-  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
-}
-
-function positiveNumber(...values) {
-  for (const value of values) {
-    const number = Number(value);
-    if (Number.isFinite(number) && number > 0) return number;
-  }
-  return 100;
-}
-
-function numericDiff(a, b) {
-  const first = Number(a);
-  const second = Number(b);
-  return Number.isFinite(first) && Number.isFinite(second) ? round(first - second) : null;
-}
-
-function numberOrNull(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? round(number) : null;
-}
 
 function escapeAttribute(value) {
   return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function round(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.round(number * 100) / 100 : null;
-}
 
-function timestampForFile() {
-  return new Date().toISOString().replace(/[:.]/g, '-');
-}
-
-function formatError(error) {
-  if (error instanceof Error && error.message) return error.message;
-  if (error?.message) return String(error.message);
-  if (error?.filename) return error.filename + ':' + (error.lineno || '?') + ' - ' + (error.message || 'Erreur script');
-  return String(error);
-}
