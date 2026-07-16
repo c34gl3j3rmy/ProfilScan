@@ -1,4 +1,4 @@
-import { numberOrNull, round } from './benchmark-utils.js';
+import { numberOrNull, round, sameReference } from './benchmark-utils.js';
 
 export function buildCandidateSearchDiagnostics(result) {
   if (!result.expectedKnownInBase) {
