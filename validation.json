@@ -1,22 +1,37 @@
 {
-  "src/app/shared/common-utils.js": {
+  "src/workers/analysis/contour-utils.js": {
     "ok": true,
-    "lines": 75,
+    "lines": 243,
     "stderr": ""
   },
-  "src/app/visual-compare/canvas-tools.js": {
+  "src/workers/analysis/debug-pipeline.js": {
     "ok": true,
-    "lines": 298,
+    "lines": 212,
     "stderr": ""
   },
-  "src/app/visual-compare/diagnostics.js": {
+  "src/workers/analysis/fingerprint-debug.js": {
     "ok": true,
-    "lines": 76,
+    "lines": 86,
     "stderr": ""
   },
-  "src/app/visual-compare.js": {
+  "src/workers/analysis/matcher.js": {
     "ok": true,
-    "lines": 371,
+    "lines": 48,
+    "stderr": ""
+  },
+  "src/workers/analysis/run-analysis.js": {
+    "ok": true,
+    "lines": 195,
+    "stderr": ""
+  },
+  "src/workers/analysis/settings.js": {
+    "ok": true,
+    "lines": 157,
+    "stderr": ""
+  },
+  "src/workers/analysis-worker.js": {
+    "ok": true,
+    "lines": 49,
     "stderr": ""
   }
 }
