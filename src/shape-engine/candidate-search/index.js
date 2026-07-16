@@ -3,11 +3,11 @@ import { compareAdvancedScores, computeHierarchicalBoost, computeLocalGate, comp
 import { DEFAULT_WEIGHTS, normalizeWeights } from './weights.js';
 import { clampScore } from './score-utils.js';
 
-export export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
+export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
   return findTopMatches(detectedFingerprint, collection, customWeights, 1)[0] || null;
 }
 
-export export function findTopMatches(detectedFingerprint, collection, customWeights = null, limit = 10) {
+export function findTopMatches(detectedFingerprint, collection, customWeights = null, limit = 10) {
   if (!collection?.profiles?.length || !detectedFingerprint) return [];
 
   return collection.profiles
@@ -19,11 +19,11 @@ export export function findTopMatches(detectedFingerprint, collection, customWei
     .slice(0, Math.max(1, limit));
 }
 
-export export function compareFingerprints(detected, reference, customWeights = null) {
+export function compareFingerprints(detected, reference, customWeights = null) {
   return compareFingerprintsDetailed(detected, reference, customWeights).score;
 }
 
-export export function compareFingerprintsDetailed(detected, reference, customWeights = null) {
+export function compareFingerprintsDetailed(detected, reference, customWeights = null) {
   return compareBaseFingerprintScores(detected, reference, customWeights);
 }
 
