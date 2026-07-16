@@ -1,0 +1,44 @@
+name: Repository audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Detect truncated or inconsistent files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run repository audit
+        id: audit
+        continue-on-error: true
+        run: node scripts/audit-repository.mjs
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profilscan-audit-report
+          path: audit-report.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail when audit found errors
+        if: steps.audit.outcome == 'failure'
+        run: |
+          echo "Repository audit found errors. Download profilscan-audit-report for details."
+          exit 1
