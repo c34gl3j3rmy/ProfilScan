@@ -1,4 +1,4 @@
-name: JavaScript syntax check
+name: JavaScript checks
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  syntax:
+  javascript:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,8 +25,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          find src -type f -name '*.js' -print0 |
+          find src test -type f -name '*.js' -print0 |
             while IFS= read -r -d '' file; do
               echo "Checking $file"
               node --check "$file"
             done
+
+      - name: Run JavaScript tests
+        run: npm test
