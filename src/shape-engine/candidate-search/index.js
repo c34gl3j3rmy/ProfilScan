@@ -1,4 +1,4 @@
-import { compareBaseFingerprintScores, combineBaseStages } from './base-scores.js';
+import { BASE_STAGE_WEIGHTS, compareBaseFingerprintScores, combineBaseStages } from './base-scores.js';
 import { compareAdvancedScores, computeHierarchicalBoost, computeLocalGate, computeRatioGate } from './advanced-scores.js';
 import { DEFAULT_WEIGHTS, normalizeWeights } from './weights.js';
 import { clampScore } from './score-utils.js';
@@ -58,8 +58,8 @@ function compareProfileDetailed(detected, profile, customWeights = null) {
       advanced: weights.advanced,
       advancedDetails: advanced.weights,
       hierarchy: {
-        globalStage: 0.62,
-        localStage: 0.38,
+        globalStage: BASE_STAGE_WEIGHTS.globalStage,
+        localStage: BASE_STAGE_WEIGHTS.localStage,
         advancedGate: 'ratioGate * localGate'
       }
     }
