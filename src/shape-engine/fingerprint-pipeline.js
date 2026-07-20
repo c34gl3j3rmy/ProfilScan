@@ -3,6 +3,7 @@ import { buildDetectedFingerprintCore, buildProfileDNACore, buildProfileFingerpr
 import { normalizePipelineSettings } from './pipeline-settings.js';
 import { buildRasterizedProfileFingerprintCore } from './svg-raster-signature.js';
 import { buildEllipticFourierDescriptor } from './elliptic-fourier.js';
+import { buildStructuralSignature } from './structural-signature.js';
 import { measureFingerprintBuild, observeFingerprintBuild } from '../observability/fingerprint-observer.js';
 import { validateFingerprintDescriptors } from '../observability/descriptor-consistency.js';
 import { buildAlgorithmTelemetryReport } from '../observability/algorithm-telemetry.js';
@@ -93,6 +94,11 @@ function enrichExperimentalDescriptors(fingerprint, settings = {}) {
       harmonics: Number(settings.efdHarmonics) || 12
     });
   }
+  if (!descriptors.structural) {
+    descriptors.structural = buildStructuralSignature(contours, {
+      gridSize: Number(settings.fillGridSize) || 96
+    });
+  }
 
   return {
     ...fingerprint,
@@ -101,7 +107,7 @@ function enrichExperimentalDescriptors(fingerprint, settings = {}) {
       ...(fingerprint.summary || {}),
       experimentalDescriptors: {
         efd: Boolean(descriptors.efd?.quality?.valid),
-        structural: false
+        structural: Boolean(descriptors.structural?.valid)
       }
     }
   };
