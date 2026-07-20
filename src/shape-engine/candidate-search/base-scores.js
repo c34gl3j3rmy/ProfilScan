@@ -5,6 +5,11 @@ import { compareStructuralSignatures } from '../structural-signature.js';
 import { DEFAULT_WEIGHTS, GLOBAL_WEIGHT_KEYS, LOCAL_WEIGHT_KEYS, isNormalizedWeightSet, normalizeWeights } from './weights.js';
 import { clampScore, compareCircularVectors, compareFillRatio, compareRatio, compareVectors, emptyScore, weightedAverage } from './score-utils.js';
 
+export const BASE_STAGE_WEIGHTS = Object.freeze({
+  globalStage: 0.75,
+  localStage: 0.25
+});
+
 export function compareBaseFingerprintScores(detected, reference, customWeights = null) {
   if (!reference) return emptyScore();
 
@@ -68,5 +73,8 @@ function compareLocalFeatures(detected, reference) {
 }
 
 export function combineBaseStages(globalStage, localStage) {
-  return clampScore((Number(globalStage) || 0) * 0.62 + (Number(localStage) || 0) * 0.38);
+  return clampScore(
+    (Number(globalStage) || 0) * BASE_STAGE_WEIGHTS.globalStage
+    + (Number(localStage) || 0) * BASE_STAGE_WEIGHTS.localStage
+  );
 }
