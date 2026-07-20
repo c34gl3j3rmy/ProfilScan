@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { compareBaseFingerprintScores } from '../src/shape-engine/candidate-search/base-scores.js';
 import { normalizeWeights } from '../src/shape-engine/candidate-search/weights.js';
 
-function fingerprint({ efdValues = [1, 0.5, 0.25], structuralFill = 0.4 } = {}) {
+function fingerprint({
+  efdValues = [1, 0.5, 0.25],
+  structuralFill = 0.4,
+  structuralVariant = false
+} = {}) {
   return {
     summary: {
       normalizedRatio: 0.5,
@@ -20,17 +24,82 @@ function fingerprint({ efdValues = [1, 0.5, 0.25], structuralFill = 0.4 } = {}) 
       },
       structural: {
         valid: true,
-        projections: {
-          horizontal: [0.2, 0.8],
-          vertical: [0.4, 0.6]
-        },
-        orientation: [0.7, 0.3],
-        topology: {
-          skeletonPixels: 20,
-          endpoints: 2,
-          junctions: 1,
-          components: 1
-        },
+        projections: structuralVariant
+          ? {
+              horizontal: [0.8, 0.2],
+              vertical: [0.9, 0.1]
+            }
+          : {
+              horizontal: [0.2, 0.8],
+              vertical: [0.4, 0.6]
+            },
+        orientation: structuralVariant ? [0.2, 0.8] : [0.7, 0.3],
+        topology: structuralVariant
+          ? {
+              skeletonPixels: 42,
+              endpoints: 6,
+              junctions: 3,
+              components: 1,
+              endpointPositions: [
+                { x: 0.1, y: 0.1 },
+                { x: 0.9, y: 0.9 }
+              ],
+              junctionPositions: [{ x: 0.8, y: 0.2 }],
+              endpointDistribution: {
+                top: 0.5,
+                right: 0,
+                bottom: 0.5,
+                left: 0,
+                center: 0
+              },
+              junctionDistribution: {
+                top: 0,
+                right: 1,
+                bottom: 0,
+                left: 0,
+                center: 0
+              }
+            }
+          : {
+              skeletonPixels: 20,
+              endpoints: 2,
+              junctions: 1,
+              components: 1,
+              endpointPositions: [
+                { x: 0.2, y: 0.5 },
+                { x: 0.8, y: 0.5 }
+              ],
+              junctionPositions: [{ x: 0.5, y: 0.5 }],
+              endpointDistribution: {
+                top: 0,
+                right: 0.5,
+                bottom: 0,
+                left: 0.5,
+                center: 0
+              },
+              junctionDistribution: {
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                center: 1
+              }
+            },
+        spatial: structuralVariant
+          ? {
+              centroidX: 0.7,
+              centroidY: 0.3,
+              width: 0.4,
+              height: 0.9,
+              aspectRatio: 0.44
+            }
+          : {
+              centroidX: 0.5,
+              centroidY: 0.5,
+              width: 0.9,
+              height: 0.4,
+              aspectRatio: 2.25
+            },
         fill: structuralFill
       }
     }
@@ -57,7 +126,10 @@ test('expose les sous-scores EFD et Structural', () => {
 test('une divergence structurelle réduit le score global', () => {
   const detected = fingerprint();
   const identical = compareBaseFingerprintScores(detected, fingerprint());
-  const different = compareBaseFingerprintScores(detected, fingerprint({ structuralFill: 0.95 }));
+  const different = compareBaseFingerprintScores(
+    detected,
+    fingerprint({ structuralFill: 0.95, structuralVariant: true })
+  );
 
   assert.ok(different.subscores.structural < identical.subscores.structural);
   assert.ok(different.subscores.globalStage < identical.subscores.globalStage);
