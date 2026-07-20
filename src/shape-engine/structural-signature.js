@@ -35,7 +35,7 @@ export function buildStructuralSignature(contours, options = {}) {
   const occupied = mask.reduce((sum, value) => sum + value, 0);
 
   return {
-    version: 'structural-signature-v1',
+    version: 'structural-signature-v2',
     valid: occupied > 0 && topology.skeletonPixels > 0,
     gridSize,
     projectionBins,
@@ -43,6 +43,7 @@ export function buildStructuralSignature(contours, options = {}) {
     topology,
     projections,
     orientation,
+    spatial: buildSpatialFeatures(mask, gridSize, occupied),
     fill: occupied / (gridSize * gridSize)
   };
 }
@@ -59,13 +60,37 @@ export function compareStructuralSignatures(left, right) {
     topologyVector(left.topology),
     topologyVector(right.topology)
   );
+  const topologySpatialScore = average([
+    distributionSimilarity(
+      left.topology?.endpointDistribution,
+      right.topology?.endpointDistribution
+    ),
+    distributionSimilarity(
+      left.topology?.junctionDistribution,
+      right.topology?.junctionDistribution
+    ),
+    pointSetSimilarity(
+      left.topology?.endpointPositions,
+      right.topology?.endpointPositions
+    ),
+    pointSetSimilarity(
+      left.topology?.junctionPositions,
+      right.topology?.junctionPositions
+    )
+  ]);
+  const spatialScore = vectorSimilarity(
+    spatialVector(left.spatial),
+    spatialVector(right.spatial)
+  );
   const fillScore = scalarSimilarity(left.fill, right.fill);
 
   return clamp(
-    (projectionScore * 0.35 +
-      orientationScore * 0.25 +
+    (projectionScore * 0.25 +
+      orientationScore * 0.15 +
       topologyScore * 0.25 +
-      fillScore * 0.15) * 100,
+      topologySpatialScore * 0.2 +
+      spatialScore * 0.1 +
+      fillScore * 0.05) * 100,
     0,
     100
   );
@@ -74,13 +99,13 @@ export function compareStructuralSignatures(left, right) {
 registerAlgorithm({
   id: 'structural',
   label: 'Signature structurelle',
-  version: '1.0.0',
+  version: '2.0.0',
   stage: 'descriptor',
   status: 'experimental',
   requires: ['normalized-contours'],
   produces: ['structural-signature'],
-  tags: ['raster', 'skeleton', 'topology', 'experimental'],
-  description: 'Decrit la topologie, les projections et les orientations du profil.',
+  tags: ['raster', 'skeleton', 'topology', 'spatial', 'experimental'],
+  description: 'Decrit la topologie, la position des branches, les projections et les orientations du profil.',
   compute: ({ input, context }) => buildStructuralSignature(
     input['normalized-contours'],
     context?.settings?.structural || {}
@@ -88,13 +113,94 @@ registerAlgorithm({
   compare: compareStructuralSignatures
 });
 
+function buildSpatialFeatures(mask, size, occupied) {
+  if (!occupied) {
+    return {
+      centroidX: 0,
+      centroidY: 0,
+      width: 0,
+      height: 0,
+      aspectRatio: 0
+    };
+  }
+
+  let sumX = 0;
+  let sumY = 0;
+  let minX = size;
+  let minY = size;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (!mask[y * size + x]) continue;
+      sumX += x;
+      sumY += y;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+
+  const scale = Math.max(1, size - 1);
+  const width = (maxX - minX + 1) / size;
+  const height = (maxY - minY + 1) / size;
+
+  return {
+    centroidX: sumX / occupied / scale,
+    centroidY: sumY / occupied / scale,
+    width,
+    height,
+    aspectRatio: width / Math.max(height, 1 / size)
+  };
+}
+
 function topologyVector(topology = {}) {
-  const pixels = Math.max(1, Number(topology.skeletonPixels) || 0);
   return [
-    (Number(topology.endpoints) || 0) / pixels,
-    (Number(topology.junctions) || 0) / pixels,
-    Math.min(1, (Number(topology.components) || 0) / 8)
+    Math.min(1, (Number(topology.endpoints) || 0) / 24),
+    Math.min(1, (Number(topology.junctions) || 0) / 16),
+    Math.min(1, (Number(topology.components) || 0) / 8),
+    Math.min(1, (Number(topology.skeletonPixels) || 0) / 512)
   ];
+}
+
+function spatialVector(spatial = {}) {
+  return [
+    Number(spatial.centroidX) || 0,
+    Number(spatial.centroidY) || 0,
+    Number(spatial.width) || 0,
+    Number(spatial.height) || 0,
+    Math.min(1, (Number(spatial.aspectRatio) || 0) / 8)
+  ];
+}
+
+function distributionSimilarity(left = {}, right = {}) {
+  const keys = ['top', 'right', 'bottom', 'left', 'center'];
+  return vectorSimilarity(
+    keys.map(key => Number(left?.[key]) || 0),
+    keys.map(key => Number(right?.[key]) || 0)
+  );
+}
+
+function pointSetSimilarity(left = [], right = []) {
+  if (!left.length && !right.length) return 1;
+  if (!left.length || !right.length) return 0;
+
+  const countScore = scalarSimilarity(left.length, right.length);
+  const forward = averageNearestDistance(left, right);
+  const backward = averageNearestDistance(right, left);
+  const positionScore = 1 - clamp((forward + backward) / 2 / Math.SQRT2, 0, 1);
+
+  return countScore * 0.4 + positionScore * 0.6;
+}
+
+function averageNearestDistance(source, target) {
+  return average(source.map(point => Math.min(...target.map(candidate => {
+    const dx = (Number(point.x) || 0) - (Number(candidate.x) || 0);
+    const dy = (Number(point.y) || 0) - (Number(candidate.y) || 0);
+    return Math.hypot(dx, dy);
+  }))));
 }
 
 function vectorSimilarity(left = [], right = []) {
@@ -117,7 +223,9 @@ function scalarSimilarity(left, right) {
 }
 
 function average(values) {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : 0;
 }
 
 function positiveInteger(value, fallback) {
