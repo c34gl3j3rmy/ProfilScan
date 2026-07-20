@@ -1,5 +1,7 @@
+import { compareEllipticFourier } from '../elliptic-fourier.js';
 import { buildLocalFeatureSignature, compareLocalFeatureSignatures } from '../local-feature-signature.js';
 import { compareMinutiaeSignatures } from '../minutiae-signature.js';
+import { compareStructuralSignatures } from '../structural-signature.js';
 import { DEFAULT_WEIGHTS, GLOBAL_WEIGHT_KEYS, LOCAL_WEIGHT_KEYS, isNormalizedWeightSet, normalizeWeights } from './weights.js';
 import { clampScore, compareCircularVectors, compareFillRatio, compareRatio, compareVectors, emptyScore, weightedAverage } from './score-utils.js';
 
@@ -12,6 +14,8 @@ export function compareBaseFingerprintScores(detected, reference, customWeights 
   const angle = compareCircularVectors(detected.descriptors?.angleHistogram, reference.descriptors?.angleHistogram, 1);
   const huScore = compareVectors(detected.descriptors?.hu, reference.descriptors?.hu, 20);
   const fourierScore = compareVectors(detected.descriptors?.fourier, reference.descriptors?.fourier, 1.4);
+  const efdScore = compareEllipticFourier(detected.descriptors?.efd, reference.descriptors?.efd);
+  const structuralScore = compareStructuralSignatures(detected.descriptors?.structural, reference.descriptors?.structural);
   const fillScore = compareFillRatio(
     detected.summary?.fillRatio ?? detected.fillRatio,
     reference.summary?.fillRatio ?? reference.fillRatio
@@ -19,7 +23,15 @@ export function compareBaseFingerprintScores(detected, reference, customWeights 
   const minutiaeScore = compareMinutiaeSignatures(detected.descriptors?.minutiae, reference.descriptors?.minutiae);
   const localFeatureScore = compareLocalFeatures(detected, reference);
 
-  const globalStage = weightedAverage({ ratio: ratioScore, radial: radial.score, fourier: fourierScore, angle: angle.score, fill: fillScore }, weights, GLOBAL_WEIGHT_KEYS);
+  const globalStage = weightedAverage({
+    ratio: ratioScore,
+    radial: radial.score,
+    fourier: fourierScore,
+    efd: efdScore,
+    angle: angle.score,
+    fill: fillScore,
+    structural: structuralScore
+  }, weights, GLOBAL_WEIGHT_KEYS);
   const localStage = weightedAverage({ minutiae: minutiaeScore, localFeature: localFeatureScore }, weights, LOCAL_WEIGHT_KEYS);
   const baseStage = combineBaseStages(globalStage, localStage);
 
@@ -36,10 +48,12 @@ export function compareBaseFingerprintScores(detected, reference, customWeights 
       hu: Math.round(huScore),
       huIgnored: 1,
       fourier: Math.round(fourierScore),
+      efd: Math.round(efdScore),
       angle: Math.round(angle.score),
       angleShift: angle.shift,
       angleReversed: angle.reversed ? 1 : 0,
       fill: Math.round(fillScore),
+      structural: Math.round(structuralScore),
       minutiae: Math.round(minutiaeScore),
       localFeature: Math.round(localFeatureScore)
     },
