@@ -1,18 +1,20 @@
 export const DEFAULT_WEIGHTS = {
-  ratio: 0.24, radial: 0.28, hu: 0, fourier: 0.10, angle: 0.22,
-  fill: 0.03, minutiae: 0.10, localFeature: 0.13, advanced: 0.25
+  ratio: 0.24, radial: 0.28, hu: 0, fourier: 0.10, efd: 0.06,
+  angle: 0.22, fill: 0.03, structural: 0.08,
+  minutiae: 0.10, localFeature: 0.13, advanced: 0.25
 };
 
 const DEFAULT_UI_WEIGHTS = {
-  ratio: 18, radial: 32, hu: 0, fourier: 8, angle: 28,
-  fill: 4, minutiae: 10, localFeature: 14
+  ratio: 18, radial: 32, hu: 0, fourier: 8, efd: 6,
+  angle: 28, fill: 4, structural: 8,
+  minutiae: 10, localFeature: 14
 };
 
 export const ADVANCED_WEIGHTS = {
   hausdorff: 0.45, shapeContext: 0.10, icp: 0.30, ransac: 0, zernike: 0.15
 };
 
-export const GLOBAL_WEIGHT_KEYS = ['ratio', 'radial', 'fourier', 'angle', 'fill'];
+export const GLOBAL_WEIGHT_KEYS = ['ratio', 'radial', 'fourier', 'efd', 'angle', 'fill', 'structural'];
 export const LOCAL_WEIGHT_KEYS = ['minutiae', 'localFeature'];
 const BASE_WEIGHT_KEYS = [...GLOBAL_WEIGHT_KEYS, ...LOCAL_WEIGHT_KEYS];
 const REPORT_ONLY_KEYS = ['hu'];
