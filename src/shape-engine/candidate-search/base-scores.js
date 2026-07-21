@@ -2,8 +2,9 @@ import { compareEllipticFourier } from '../elliptic-fourier.js';
 import { buildLocalFeatureSignature, compareLocalFeatureSignatures } from '../local-feature-signature.js';
 import { compareMinutiaeSignatures } from '../minutiae-signature.js';
 import { compareStructuralSignatures } from '../structural-signature.js';
-import { DEFAULT_WEIGHTS, GLOBAL_WEIGHT_KEYS, LOCAL_WEIGHT_KEYS, isNormalizedWeightSet, normalizeWeights } from './weights.js';
-import { clampScore, compareCircularVectors, compareFillRatio, compareRatio, compareVectors, emptyScore, weightedAverage } from './score-utils.js';
+import { computeBaseStages } from './score-composition.js';
+import { DEFAULT_WEIGHTS, isNormalizedWeightSet, normalizeWeights } from './weights.js';
+import { compareCircularVectors, compareFillRatio, compareRatio, compareVectors, emptyScore } from './score-utils.js';
 
 export function compareBaseFingerprintScores(detected, reference, customWeights = null) {
   if (!reference) return emptyScore();
@@ -22,25 +23,30 @@ export function compareBaseFingerprintScores(detected, reference, customWeights 
   );
   const minutiaeScore = compareMinutiaeSignatures(detected.descriptors?.minutiae, reference.descriptors?.minutiae);
   const localFeatureScore = compareLocalFeatures(detected, reference);
-
-  const globalStage = weightedAverage({
+  const rawSubscores = {
     ratio: ratioScore,
     radial: radial.score,
+    hu: huScore,
     fourier: fourierScore,
     efd: efdScore,
     angle: angle.score,
     fill: fillScore,
-    structural: structuralScore
-  }, weights, GLOBAL_WEIGHT_KEYS);
-  const localStage = weightedAverage({ minutiae: minutiaeScore, localFeature: localFeatureScore }, weights, LOCAL_WEIGHT_KEYS);
-  const baseStage = combineBaseStages(globalStage, localStage);
+    structural: structuralScore,
+    minutiae: minutiaeScore,
+    localFeature: localFeatureScore
+  };
+  const stages = computeBaseStages(rawSubscores, weights);
 
   return {
-    score: clampScore(baseStage),
+    score: stages.baseStage,
+    rawSubscores: {
+      ...rawSubscores,
+      ...stages
+    },
     subscores: {
-      globalStage: Math.round(globalStage),
-      localStage: Math.round(localStage),
-      baseStage: Math.round(baseStage),
+      globalStage: Math.round(stages.globalStage),
+      localStage: Math.round(stages.localStage),
+      baseStage: Math.round(stages.baseStage),
       ratio: Math.round(ratioScore),
       radial: Math.round(radial.score),
       radialShift: radial.shift,
@@ -65,8 +71,4 @@ function compareLocalFeatures(detected, reference) {
   const detectedSignature = detected.descriptors?.localFeature || buildLocalFeatureSignature(detected.descriptors?.points || detected.contour?.normalizedPoints || []);
   const referenceSignature = reference.descriptors?.localFeature || buildLocalFeatureSignature(reference.descriptors?.points || reference.contour?.normalizedPoints || []);
   return compareLocalFeatureSignatures(detectedSignature, referenceSignature);
-}
-
-export function combineBaseStages(globalStage, localStage) {
-  return clampScore((Number(globalStage) || 0) * 0.62 + (Number(localStage) || 0) * 0.38);
 }
