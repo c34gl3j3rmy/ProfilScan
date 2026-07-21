@@ -59,10 +59,6 @@ export function computeRatioGate(ratioScore) {
   return 0.45;
 }
 
-export function computeLocalGate(localStage) {
-  if (!Number.isFinite(localStage)) return 1;
-  if (localStage >= 82) return 1;
-  if (localStage >= 68) return 0.90;
-  if (localStage >= 55) return 0.72;
-  return 0.50;
+export function computeLocalGate() {
+  return 1;
 }
