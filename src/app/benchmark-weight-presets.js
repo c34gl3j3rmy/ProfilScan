@@ -1,3 +1,5 @@
+import { composeCandidateScore } from '../shape-engine/candidate-search/score-composition.js';
+
 export const CANDIDATE_WEIGHT_PRESET_NAME = 'benchmark-2026-07-auto-187';
 
 export const WEIGHT_PRESETS = [
@@ -182,7 +184,10 @@ function summarizePreset(results, preset, category) {
 }
 
 function rescoreResult(result, preset) {
-  const rescored = result.topCandidates.map(candidate => ({ ...candidate, presetScore: scoreCandidate(candidate, preset) }));
+  const rescored = result.topCandidates.map(candidate => ({
+    ...candidate,
+    presetScore: scoreCandidateWithPreset(candidate, preset)
+  }));
   const values = rescored.map(candidate => candidate.presetScore).filter(Number.isFinite);
   const spread = values.length ? Math.max(...values) - Math.min(...values) : 0;
   if (spread <= EPSILON) return emptyRow(result, spread);
@@ -210,13 +215,20 @@ function rescoreResult(result, preset) {
   };
 }
 
-function scoreCandidate(candidate, preset) {
+export function scoreCandidateWithPreset(candidate, preset) {
   const subscores = candidate.scoreDetails?.subscores || {};
-  const baseScore = weightedScore(subscores, preset.base, BASE_KEYS);
-  const advancedScore = preset.advancedDetails
-    ? weightedScore(subscores, preset.advancedDetails, ADVANCED_KEYS) * numeric(subscores.ratioGate, 100) / 100
-    : numeric(subscores.advanced);
-  return baseScore * (1 - preset.advancedWeight) + advancedScore * preset.advancedWeight;
+  const rawSubscores = candidate.scoreDetails?.rawSubscores || subscores;
+  const advancedRawScore = preset.advancedDetails
+    ? weightedScore(rawSubscores, preset.advancedDetails, ADVANCED_KEYS)
+    : numeric(rawSubscores.advancedRaw, numeric(subscores.advancedRaw, numeric(subscores.advanced)));
+
+  return composeCandidateScore({
+    baseSubscores: rawSubscores,
+    baseWeights: preset.base,
+    advancedSubscores: rawSubscores,
+    advancedRawScore,
+    advancedWeight: preset.advancedWeight
+  }).score;
 }
 
 function weightedScore(scores, weights, keys) {
