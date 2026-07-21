@@ -12,4 +12,5 @@ export function findTopMatches(detectedFingerprint, collection, customWeights = 
 
   return collection.profiles
     .map(profile => {
-      const scoreDetails = compareProfileDetailed
+      const scoreDetails = compareProfileDetailed(detectedFingerprint, profile, customWeights);
+      return { ...
