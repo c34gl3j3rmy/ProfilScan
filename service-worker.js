@@ -1,9 +1,11 @@
-const CACHE_NAME = 'profilscan-v1.5.11';
+const CACHE_NAME = 'profilscan-v1.6.0';
 
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
+  './assets/images/icon-192.png',
+  './assets/images/icon-512.png',
   './src/app/ui.css',
   './src/app/app.js',
   './src/app/app-main.js'
@@ -34,21 +36,38 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const { request } = event;
 
-  if (request.method !== 'GET') return;
+  if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(request).then(cached => {
-      if (cached) return cached;
+      const network = fetch(request)
+        .then(response => {
+          if (!response || response.status !== 200 || response.type === 'opaque') {
+            return response;
+          }
 
-      return fetch(request).then(response => {
-        if (!response || response.status !== 200 || response.type === 'opaque') {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
           return response;
-        }
+        })
+        .catch(() => cached || Response.error());
 
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
-        return response;
-      });
+      return cached || network;
     })
   );
 });

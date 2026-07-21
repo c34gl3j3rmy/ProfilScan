@@ -1,16 +1,27 @@
 {
-  "source": "batch-benchmark.js uploaded by user",
-  "files": {
-    "src/app/batch-benchmark.js": 279,
-    "src/app/benchmark/benchmark-algorithms.js": 133,
-    "src/app/benchmark/benchmark-diagnostics.js": 114,
-    "src/app/benchmark/benchmark-report.js": 126,
-    "src/app/benchmark/benchmark-ui.js": 29,
-    "src/app/benchmark/benchmark-utils.js": 62
-  },
-  "reportVersion": "batch-benchmark-full-ranking-v3",
-  "algorithmsAdded": [
-    "efd",
-    "structural"
+  "id": "./",
+  "name": "ProfilScan — Identification de profils aluminium",
+  "short_name": "ProfilScan",
+  "description": "Identifie localement la référence d'un profilé aluminium à partir d'une photo ou d'une image.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f4f6",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "assets/images/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
   ]
 }
