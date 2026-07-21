@@ -43,7 +43,7 @@ export function isNormalizedWeightSet(weights) {
 
 function positiveWeight(weights, key) {
   const number = Number(weights?.[key]);
-  if (Number.isFinite(number) && number > 0) return number;
+  if (Number.isFinite(number) && number >= 0) return number;
   if (isUiWeightSet(weights)) return DEFAULT_UI_WEIGHTS[key] || 0;
   return DEFAULT_WEIGHTS[key] || 0;
 }

@@ -8,7 +8,7 @@ import { zernikeLikeScore } from '../zernike.js';
 import { buildAlignmentVariants } from './alignment.js';
 import { ADVANCED_WEIGHTS } from './weights.js';
 
-export function compareAdvancedScores(detected, profile) {
+export function compareAdvancedScores(detected, profile, customWeights = ADVANCED_WEIGHTS) {
   const detectedPoints = detected.descriptors?.points || detected.contour?.normalizedPoints;
   const referencePoints = profile.dna?.contour?.normalizedPoints || profile.fingerprint?.descriptors?.points;
   if (!detectedPoints?.length || !referencePoints?.length) return null;
@@ -26,7 +26,7 @@ export function compareAdvancedScores(detected, profile) {
         ransac: Math.min(ransacLineScore(variant.points), ransacLineScore(target)),
         zernike: zernikeLikeScore(variant.points, target)
       },
-      ADVANCED_WEIGHTS
+      customWeights || ADVANCED_WEIGHTS
     );
 
     if (!best || candidate.score > best.score) {

@@ -2,6 +2,7 @@ import { compareEllipticFourier } from '../elliptic-fourier.js';
 import { buildLocalFeatureSignature, compareLocalFeatureSignatures } from '../local-feature-signature.js';
 import { compareMinutiaeSignatures } from '../minutiae-signature.js';
 import { compareStructuralSignatures } from '../structural-signature.js';
+import { combineBaseStages } from './score-composition.js';
 import { DEFAULT_WEIGHTS, GLOBAL_WEIGHT_KEYS, LOCAL_WEIGHT_KEYS, isNormalizedWeightSet, normalizeWeights } from './weights.js';
 import { clampScore, compareCircularVectors, compareFillRatio, compareRatio, compareVectors, emptyScore, weightedAverage } from './score-utils.js';
 
@@ -22,21 +23,30 @@ export function compareBaseFingerprintScores(detected, reference, customWeights 
   );
   const minutiaeScore = compareMinutiaeSignatures(detected.descriptors?.minutiae, reference.descriptors?.minutiae);
   const localFeatureScore = compareLocalFeatures(detected, reference);
-
-  const globalStage = weightedAverage({
+  const rawSubscores = {
     ratio: ratioScore,
     radial: radial.score,
     fourier: fourierScore,
     efd: efdScore,
     angle: angle.score,
     fill: fillScore,
-    structural: structuralScore
-  }, weights, GLOBAL_WEIGHT_KEYS);
-  const localStage = weightedAverage({ minutiae: minutiaeScore, localFeature: localFeatureScore }, weights, LOCAL_WEIGHT_KEYS);
+    structural: structuralScore,
+    minutiae: minutiaeScore,
+    localFeature: localFeatureScore
+  };
+
+  const globalStage = weightedAverage(rawSubscores, weights, GLOBAL_WEIGHT_KEYS);
+  const localStage = weightedAverage(rawSubscores, weights, LOCAL_WEIGHT_KEYS);
   const baseStage = combineBaseStages(globalStage, localStage);
 
   return {
     score: clampScore(baseStage),
+    rawSubscores: {
+      ...rawSubscores,
+      globalStage,
+      localStage,
+      baseStage
+    },
     subscores: {
       globalStage: Math.round(globalStage),
       localStage: Math.round(localStage),
@@ -65,8 +75,4 @@ function compareLocalFeatures(detected, reference) {
   const detectedSignature = detected.descriptors?.localFeature || buildLocalFeatureSignature(detected.descriptors?.points || detected.contour?.normalizedPoints || []);
   const referenceSignature = reference.descriptors?.localFeature || buildLocalFeatureSignature(reference.descriptors?.points || reference.contour?.normalizedPoints || []);
   return compareLocalFeatureSignatures(detectedSignature, referenceSignature);
-}
-
-export function combineBaseStages(globalStage, localStage) {
-  return clampScore((Number(globalStage) || 0) * 0.62 + (Number(localStage) || 0) * 0.38);
 }

@@ -1,7 +1,7 @@
-import { compareBaseFingerprintScores, combineBaseStages } from './base-scores.js';
-import { compareAdvancedScores, computeHierarchicalBoost, computeLocalGate, computeRatioGate } from './advanced-scores.js';
-import { DEFAULT_WEIGHTS, normalizeWeights } from './weights.js';
-import { clampScore } from './score-utils.js';
+import { compareBaseFingerprintScores } from './base-scores.js';
+import { compareAdvancedScores } from './advanced-scores.js';
+import { composeCandidateScore } from './score-composition.js';
+import { ADVANCED_WEIGHTS, DEFAULT_WEIGHTS, normalizeWeights } from './weights.js';
 
 export function findBestMatch(detectedFingerprint, collection, customWeights = null) {
   return findTopMatches(detectedFingerprint, collection, customWeights, 1)[0] || null;
@@ -28,34 +28,56 @@ export function compareFingerprintsDetailed(detected, reference, customWeights =
 }
 
 function compareProfileDetailed(detected, profile, customWeights = null) {
-  const weights = normalizeWeights(customWeights || DEFAULT_WEIGHTS);
+  const baseWeightInput = customWeights?.base || customWeights || DEFAULT_WEIGHTS;
+  const weights = normalizeWeights(baseWeightInput);
+  const advancedWeight = Number.isFinite(Number(customWeights?.advancedWeight))
+    ? Number(customWeights.advancedWeight)
+    : weights.advanced;
+  const advancedWeights = customWeights?.advancedDetails
+    || customWeights?.advancedWeights
+    || ADVANCED_WEIGHTS;
   const base = compareBaseFingerprintScores(detected, profile.fingerprint, weights);
-  const advanced = compareAdvancedScores(detected, profile);
+  const advanced = compareAdvancedScores(detected, profile, advancedWeights);
   if (!advanced) return base;
 
-  const ratioGate = computeRatioGate(base.subscores.ratio);
-  const localGate = computeLocalGate(base.subscores.localStage);
-  const advancedScore = advanced.score * ratioGate * localGate;
-  const baseStage = combineBaseStages(base.subscores.globalStage, base.subscores.localStage);
-  const hierarchicalBoost = computeHierarchicalBoost(base.subscores, advanced.subscores);
-  const score = baseStage * (1 - weights.advanced) + advancedScore * weights.advanced + hierarchicalBoost;
+  const composition = composeCandidateScore({
+    baseSubscores: base.rawSubscores || base.subscores,
+    baseWeights: base.weights,
+    advancedSubscores: advanced.rawSubscores || advanced.subscores,
+    advancedRawScore: advanced.score,
+    advancedWeight
+  });
 
   return {
-    score: clampScore(score),
+    score: composition.score,
+    rawSubscores: {
+      ...(base.rawSubscores || base.subscores),
+      ...(advanced.rawSubscores || advanced.subscores),
+      globalStage: composition.globalStage,
+      localStage: composition.localStage,
+      baseStage: composition.baseStage,
+      advanced: composition.advanced,
+      advancedRaw: composition.advancedRaw,
+      ratioGate: composition.ratioGate,
+      localGate: composition.localGate,
+      hierarchicalBoost: composition.hierarchicalBoost
+    },
     subscores: {
       ...base.subscores,
-      baseStage: Math.round(baseStage),
-      advanced: Math.round(advancedScore),
-      advancedRaw: Math.round(advanced.score),
-      ratioGate: Math.round(ratioGate * 100),
-      localGate: Math.round(localGate * 100),
-      hierarchicalBoost: Math.round(hierarchicalBoost),
+      globalStage: Math.round(composition.globalStage),
+      localStage: Math.round(composition.localStage),
+      baseStage: Math.round(composition.baseStage),
+      advanced: Math.round(composition.advanced),
+      advancedRaw: Math.round(composition.advancedRaw),
+      ratioGate: Math.round(composition.ratioGate * 100),
+      localGate: Math.round(composition.localGate * 100),
+      hierarchicalBoost: Math.round(composition.hierarchicalBoost),
       alignment: advanced.alignment,
       ...advanced.subscores
     },
     weights: {
       ...base.weights,
-      advanced: weights.advanced,
+      advanced: composition.advancedWeight,
       advancedDetails: advanced.weights,
       hierarchy: {
         globalStage: 0.62,
