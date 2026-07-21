@@ -10,22 +10,25 @@ export function fuseScores(scores, weights) {
     total += weight;
   }
 
-  if (total <= 0) return { score: 0, subscores: {}, weights: {} };
+  if (total <= 0) return { score: 0, subscores: {}, rawSubscores: {}, weights: {} };
 
   let merged = 0;
   const subscores = {};
+  const rawSubscores = {};
   const normalizedWeights = {};
 
   for (const [key, item] of Object.entries(clean)) {
     const normalizedWeight = item.weight / total;
     merged += item.score * normalizedWeight;
     subscores[key] = Math.round(item.score);
+    rawSubscores[key] = item.score;
     normalizedWeights[key] = normalizedWeight;
   }
 
   return {
     score: clamp(merged),
     subscores,
+    rawSubscores,
     weights: normalizedWeights
   };
 }
